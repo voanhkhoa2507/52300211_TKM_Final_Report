@@ -227,6 +227,13 @@ LOOPBACKS: Dict[str, str] = {
     "PE1": "10.255.0.11/32",
     "PE2": "10.255.0.12/32",
     "PE3": "10.255.0.13/32",
+    # Branch 3 router-id (Leaf/Spine/CE3)
+    "CE3": "10.255.3.1/32",
+    "SPINE1": "10.255.3.11/32",
+    "SPINE2": "10.255.3.12/32",
+    "LEAF_WEB": "10.255.3.21/32",
+    "LEAF_DNS": "10.255.3.22/32",
+    "LEAF_DB": "10.255.3.23/32",
 }
 
 # Backbone + CE-PE (tối thiểu để OSPF+LDP chạy)
@@ -290,10 +297,11 @@ def build_net(start_cli: bool = False) -> Mininet:
     PE2 = net.addHost("PE2", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=True, enable_ldp=True)
     PE3 = net.addHost("PE3", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=True, enable_ldp=True)
 
-    # --- CE routers (chạy IP forwarding; branch3 cần ECMP -> vẫn bật ospf để sau mở rộng)
+    # --- CE routers
     CE1 = net.addHost("CE1", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
     CE2 = net.addHost("CE2", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
-    CE3 = net.addHost("CE3", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
+    # CE3 tham gia OSPF trong Branch 3 để học route từ leaf/spine, nhưng KHÔNG chạy LDP
+    CE3 = net.addHost("CE3", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=True, enable_ldp=False)
 
     # --- Branch 1 (Flat)
     sw_flat_a = add_ovs_switch(net, "SW_FLAT_A")
@@ -320,11 +328,11 @@ def build_net(start_cli: bool = False) -> Mininet:
 
     # --- Branch 3 (Leaf-Spine)
     agg = add_ovs_switch(net, "AGG_EDGE", stp=True)
-    spine1 = net.addHost("SPINE1", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
-    spine2 = net.addHost("SPINE2", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
-    leaf_web = net.addHost("LEAF_WEB", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
-    leaf_dns = net.addHost("LEAF_DNS", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
-    leaf_db = net.addHost("LEAF_DB", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
+    spine1 = net.addHost("SPINE1", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=True, enable_ldp=False)
+    spine2 = net.addHost("SPINE2", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=True, enable_ldp=False)
+    leaf_web = net.addHost("LEAF_WEB", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=True, enable_ldp=False)
+    leaf_dns = net.addHost("LEAF_DNS", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=True, enable_ldp=False)
+    leaf_db = net.addHost("LEAF_DB", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=True, enable_ldp=False)
     web1 = net.addHost("web1", ip="10.3.10.11/24", defaultRoute="via 10.3.10.1")
     web2 = net.addHost("web2", ip="10.3.10.12/24", defaultRoute="via 10.3.10.1")
     dns1 = net.addHost("dns1", ip="10.3.20.11/24", defaultRoute="via 10.3.20.1")
@@ -361,9 +369,14 @@ def build_net(start_cli: bool = False) -> Mininet:
     net.addLink(CE3, agg, intfName1="CE3-eth0", bw=1000)
     net.addLink(agg, spine1, intfName2="SPINE1-eth0", bw=1000)
     net.addLink(agg, spine2, intfName2="SPINE2-eth0", bw=1000)
-    for leaf in (leaf_web, leaf_dns, leaf_db):
-        net.addLink(spine1, leaf, intfName1=None, intfName2=f"{leaf.name}-eth0", bw=1000)
-        net.addLink(spine2, leaf, intfName1=None, intfName2=f"{leaf.name}-eth1", bw=1000)
+
+    # Đặt interface spine<->leaf cố định để gán IP underlay/OSPF ổn định
+    net.addLink(spine1, leaf_web, intfName1="SPINE1-eth1", intfName2="LEAF_WEB-eth0", bw=1000)
+    net.addLink(spine2, leaf_web, intfName1="SPINE2-eth1", intfName2="LEAF_WEB-eth1", bw=1000)
+    net.addLink(spine1, leaf_dns, intfName1="SPINE1-eth2", intfName2="LEAF_DNS-eth0", bw=1000)
+    net.addLink(spine2, leaf_dns, intfName1="SPINE2-eth2", intfName2="LEAF_DNS-eth1", bw=1000)
+    net.addLink(spine1, leaf_db, intfName1="SPINE1-eth3", intfName2="LEAF_DB-eth0", bw=1000)
+    net.addLink(spine2, leaf_db, intfName1="SPINE2-eth3", intfName2="LEAF_DB-eth1", bw=1000)
     net.addLink(leaf_web, web1, intfName1="LEAF_WEB-eth2", intfName2="web1-eth0", bw=1000)
     net.addLink(leaf_web, web2, intfName1="LEAF_WEB-eth3", intfName2="web2-eth0", bw=1000)
     net.addLink(leaf_dns, dns1, intfName1="LEAF_DNS-eth2", intfName2="dns1-eth0", bw=1000)
@@ -388,7 +401,7 @@ def build_net(start_cli: bool = False) -> Mininet:
     # Backbone MTU
     BACKBONE_MTU = 1512
 
-    # Loopbacks P/PE
+    # Loopbacks (router-id OSPF/LDP): P/PE + Branch3 routers
     for rname, lo_cidr in LOOPBACKS.items():
         add_lo(net.get(rname), lo_cidr)
 
@@ -504,15 +517,27 @@ def build_net(start_cli: bool = False) -> Mininet:
     mk_bridge(leaf_dns, "br-dns", ["LEAF_DNS-eth2", "LEAF_DNS-eth3"], "10.3.20.1/24")
     mk_bridge(leaf_db, "br-db", ["LEAF_DB-eth2", "LEAF_DB-eth3"], "10.3.30.1/24")
 
-    # Route từ leaf -> CE3 (qua spine/agg): tạm thời default route về CE3 qua AGG_EDGE L2 domain.
-    # Gán IP L3 giữa CE3 và leaf domain (mô phỏng đơn giản, vẫn giữ link vật lý).
-    add_ip(CE3, "CE3-eth0", "10.3.0.1/24")
-    add_ip(leaf_web, "LEAF_WEB-eth0", "10.3.0.11/24")
-    add_ip(leaf_dns, "LEAF_DNS-eth0", "10.3.0.12/24")
-    add_ip(leaf_db, "LEAF_DB-eth0", "10.3.0.13/24")
-    for leaf in (leaf_web, leaf_dns, leaf_db):
-        leaf.cmd("ip route del default 2>/dev/null || true")
-        leaf.cmd("ip route add default via 10.3.0.1")
+    # Underlay L3 cho Leaf-Spine (để ping chéo VLAN và ECMP hoạt động đúng)
+    # - CE3 <-> Spines đi chung L2 qua AGG_EDGE: 10.3.255.0/24
+    add_ip(CE3, "CE3-eth0", "10.3.255.1/24")
+    add_ip(spine1, "SPINE1-eth0", "10.3.255.11/24")
+    add_ip(spine2, "SPINE2-eth0", "10.3.255.12/24")
+
+    # - Spine <-> Leaf: p2p /30
+    add_ip(spine1, "SPINE1-eth1", "10.3.0.1/30")
+    add_ip(leaf_web, "LEAF_WEB-eth0", "10.3.0.2/30")
+    add_ip(spine2, "SPINE2-eth1", "10.3.0.5/30")
+    add_ip(leaf_web, "LEAF_WEB-eth1", "10.3.0.6/30")
+
+    add_ip(spine1, "SPINE1-eth2", "10.3.0.9/30")
+    add_ip(leaf_dns, "LEAF_DNS-eth0", "10.3.0.10/30")
+    add_ip(spine2, "SPINE2-eth2", "10.3.0.13/30")
+    add_ip(leaf_dns, "LEAF_DNS-eth1", "10.3.0.14/30")
+
+    add_ip(spine1, "SPINE1-eth3", "10.3.0.17/30")
+    add_ip(leaf_db, "LEAF_DB-eth0", "10.3.0.18/30")
+    add_ip(spine2, "SPINE2-eth3", "10.3.0.21/30")
+    add_ip(leaf_db, "LEAF_DB-eth1", "10.3.0.22/30")
 
     # =========================
     # CE->PE routing (static)
@@ -536,14 +561,21 @@ def build_net(start_cli: bool = False) -> Mininet:
     # OSPF underlay on backbone (P/PE)
     # =========================
     # Router-ID từ loopback /32, chạy area 0 trên tất cả eth + lo.
-    def ospf_cfg(router: FrrRouter, rid: str) -> None:
+    def ospf_cfg(router: FrrRouter, rid: str, *, no_passive: Optional[List[str]] = None, extra_ifaces: Optional[List[str]] = None) -> None:
         # enable ospf, passive-interface default; no passive on backbone eth; advertise lo + p2p
         # đơn giản: đưa toàn bộ interface eth* + lo vào OSPF area 0
         intfs = router.cmd("ip -o link | awk -F': ' '{print $2}' | grep -E '^" + router.name + r"-eth'").strip().splitlines()
+        if extra_ifaces:
+            intfs = list(dict.fromkeys(intfs + extra_ifaces))
         lines = ["conf t", "router ospf", f"ospf router-id {rid}", "passive-interface default"]
-        for i in intfs:
-            # bật OSPF trên backbone, bỏ passive
+        if no_passive is None:
+            no_passive = intfs
+        for i in no_passive:
             lines += [f"no passive-interface {i}"]
+
+        # Tạm thời để liên chi nhánh ping thông: PE quảng bá static/connected vào underlay
+        if router.name.startswith("PE"):
+            lines += ["redistribute connected", "redistribute static"]
         lines += ["exit"]
         for i in intfs:
             lines += [f"interface {i}", "ip ospf area 0", "exit"]
@@ -554,6 +586,14 @@ def build_net(start_cli: bool = False) -> Mininet:
         r = net.get(rname)
         rid = LOOPBACKS[rname].split("/")[0]
         ospf_cfg(r, rid)
+
+    # OSPF trong Branch 3 (Leaf-Spine): bật trên underlay ports; bridge VLAN chỉ advertise (passive)
+    ospf_cfg(net.get("CE3"), LOOPBACKS["CE3"].split("/")[0], no_passive=["CE3-eth0"], extra_ifaces=[])
+    ospf_cfg(net.get("SPINE1"), LOOPBACKS["SPINE1"].split("/")[0], no_passive=["SPINE1-eth0", "SPINE1-eth1", "SPINE1-eth2", "SPINE1-eth3"])
+    ospf_cfg(net.get("SPINE2"), LOOPBACKS["SPINE2"].split("/")[0], no_passive=["SPINE2-eth0", "SPINE2-eth1", "SPINE2-eth2", "SPINE2-eth3"])
+    ospf_cfg(net.get("LEAF_WEB"), LOOPBACKS["LEAF_WEB"].split("/")[0], no_passive=["LEAF_WEB-eth0", "LEAF_WEB-eth1"], extra_ifaces=["br-web"])
+    ospf_cfg(net.get("LEAF_DNS"), LOOPBACKS["LEAF_DNS"].split("/")[0], no_passive=["LEAF_DNS-eth0", "LEAF_DNS-eth1"], extra_ifaces=["br-dns"])
+    ospf_cfg(net.get("LEAF_DB"), LOOPBACKS["LEAF_DB"].split("/")[0], no_passive=["LEAF_DB-eth0", "LEAF_DB-eth1"], extra_ifaces=["br-db"])
 
     # LDP: bật trên các interface backbone eth* của P/PE
     def ldp_cfg(router: FrrRouter, lsr_id: str) -> None:
