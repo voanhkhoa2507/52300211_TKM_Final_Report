@@ -108,6 +108,8 @@ class FrrRouter(Node):
 
     def __init__(self, name: str, **params):
         self.frr_conf_dir = f"/tmp/{name}"
+        self.frr_run_dir = f"/tmp/{name}/run"
+        self.zebra_sock = f"/tmp/{name}/run/zserv.api"
         self.enable_ospf = params.pop("enable_ospf", True)
         self.enable_ldp = params.pop("enable_ldp", False)
         super().__init__(name, **params)
@@ -130,6 +132,7 @@ class FrrRouter(Node):
         # Chuẩn bị thư mục config FRR
         self.cmd(f"rm -rf {self.frr_conf_dir} && mkdir -p {self.frr_conf_dir}")
         self.cmd(f"chmod 777 {self.frr_conf_dir}")
+        self.cmd(f"mkdir -p {self.frr_run_dir} && chmod 777 {self.frr_run_dir}")
 
         # Bật daemon cần thiết qua file daemons
         daemons = [
@@ -172,17 +175,20 @@ class FrrRouter(Node):
         # Start zebra
         self.cmd(
             f"{frr_bin}/zebra -d -A 127.0.0.1 "
+            f"-z {self.zebra_sock} --vty_socket {self.frr_run_dir} "
             f"-f {self.frr_conf_dir}/zebra.conf -i {self.frr_conf_dir}/zebra.pid >/dev/null 2>&1"
         )
         if self.enable_ospf:
             self.cmd(
                 f"{frr_bin}/ospfd -d -A 127.0.0.1 "
+                f"-z {self.zebra_sock} --vty_socket {self.frr_run_dir} "
                 f"-f {self.frr_conf_dir}/ospfd.conf -i {self.frr_conf_dir}/ospfd.pid >/dev/null 2>&1"
             )
         if self.enable_ldp:
             # ldpd cần cho MPLS/LDP
             self.cmd(
                 f"{frr_bin}/ldpd -d -A 127.0.0.1 "
+                f"-z {self.zebra_sock} --vty_socket {self.frr_run_dir} "
                 f"-f {self.frr_conf_dir}/ldpd.conf -i {self.frr_conf_dir}/ldpd.pid >/dev/null 2>&1"
             )
 
@@ -199,7 +205,7 @@ class FrrRouter(Node):
         lines = [l.strip() for l in cmds.splitlines() if l.strip() and not l.strip().startswith("#")]
         if not lines:
             return ""
-        parts: List[str] = ['vtysh', '-c', '"enable"']
+        parts: List[str] = ['vtysh', f'--vty_socket "{self.frr_run_dir}"', '-c', '"enable"']
         for l in lines:
             safe = l.replace('"', '\\"')
             parts += ['-c', f'"{safe}"']
