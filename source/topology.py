@@ -207,8 +207,10 @@ class FrrRouter(Node):
 @dataclass(frozen=True)
 class LinkIP:
     a: str
+    a_if: str
     a_ip: str
     b: str
+    b_if: str
     b_ip: str
     subnet: str
 
@@ -226,35 +228,35 @@ LOOPBACKS: Dict[str, str] = {
 # Backbone + CE-PE (tối thiểu để OSPF+LDP chạy)
 BACKBONE_LINKS: List[LinkIP] = [
     # P1-P2
-    LinkIP("P1", "10.0.12.1/30", "P2", "10.0.12.2/30", "10.0.12.0/30"),
+    LinkIP("P1", "P1-eth0", "10.0.12.1/30", "P2", "P2-eth0", "10.0.12.2/30", "10.0.12.0/30"),
     # P1-PE1
-    LinkIP("P1", "10.0.11.1/30", "PE1", "10.0.11.2/30", "10.0.11.0/30"),
+    LinkIP("P1", "P1-eth1", "10.0.11.1/30", "PE1", "PE1-eth0", "10.0.11.2/30", "10.0.11.0/30"),
     # P3-PE1
-    LinkIP("P3", "10.0.13.1/30", "PE1", "10.0.13.2/30", "10.0.13.0/30"),
+    LinkIP("P3", "P3-eth0", "10.0.13.1/30", "PE1", "PE1-eth1", "10.0.13.2/30", "10.0.13.0/30"),
     # P1-P4 (diagonal)
-    LinkIP("P1", "10.0.14.1/30", "P4", "10.0.14.2/30", "10.0.14.0/30"),
+    LinkIP("P1", "P1-eth2", "10.0.14.1/30", "P4", "P4-eth0", "10.0.14.2/30", "10.0.14.0/30"),
     # P3-P1 (extra)
-    LinkIP("P3", "10.0.31.1/30", "P1", "10.0.31.2/30", "10.0.31.0/30"),
+    LinkIP("P3", "P3-eth1", "10.0.31.1/30", "P1", "P1-eth3", "10.0.31.2/30", "10.0.31.0/30"),
     # P3-P4
-    LinkIP("P3", "10.0.34.1/30", "P4", "10.0.34.2/30", "10.0.34.0/30"),
+    LinkIP("P3", "P3-eth2", "10.0.34.1/30", "P4", "P4-eth1", "10.0.34.2/30", "10.0.34.0/30"),
     # P4-P2 (vertical)
-    LinkIP("P4", "10.0.42.1/30", "P2", "10.0.42.2/30", "10.0.42.0/30"),
+    LinkIP("P4", "P4-eth2", "10.0.42.1/30", "P2", "P2-eth1", "10.0.42.2/30", "10.0.42.0/30"),
     # P2-P3 (diagonal shown as 10.0.23.4/30 label in drawio; dùng /30 riêng)
-    LinkIP("P2", "10.0.23.5/30", "P3", "10.0.23.6/30", "10.0.23.4/30"),
+    LinkIP("P2", "P2-eth2", "10.0.23.5/30", "P3", "P3-eth3", "10.0.23.6/30", "10.0.23.4/30"),
     # P3-PE2
-    LinkIP("P3", "10.0.23.1/30", "PE2", "10.0.23.2/30", "10.0.23.0/30"),
+    LinkIP("P3", "P3-eth4", "10.0.23.1/30", "PE2", "PE2-eth0", "10.0.23.2/30", "10.0.23.0/30"),
     # PE2-P4
-    LinkIP("PE2", "10.0.24.1/30", "P4", "10.0.24.2/30", "10.0.24.0/30"),
+    LinkIP("PE2", "PE2-eth1", "10.0.24.1/30", "P4", "P4-eth3", "10.0.24.2/30", "10.0.24.0/30"),
     # P2-PE3
-    LinkIP("P2", "10.0.27.1/30", "PE3", "10.0.27.2/30", "10.0.27.0/30"),
+    LinkIP("P2", "P2-eth3", "10.0.27.1/30", "PE3", "PE3-eth0", "10.0.27.2/30", "10.0.27.0/30"),
     # P4-PE3
-    LinkIP("P4", "10.0.47.1/30", "PE3", "10.0.47.2/30", "10.0.47.0/30"),
+    LinkIP("P4", "P4-eth4", "10.0.47.1/30", "PE3", "PE3-eth1", "10.0.47.2/30", "10.0.47.0/30"),
 ]
 
 CE_PE_LINKS: List[LinkIP] = [
-    LinkIP("CE1", "10.0.101.1/30", "PE1", "10.0.101.2/30", "10.0.101.0/30"),
-    LinkIP("CE2", "10.0.102.1/30", "PE2", "10.0.102.2/30", "10.0.102.0/30"),
-    LinkIP("CE3", "10.0.103.1/30", "PE3", "10.0.103.2/30", "10.0.103.0/30"),
+    LinkIP("CE1", "CE1-eth1", "10.0.101.1/30", "PE1", "PE1-eth2", "10.0.101.2/30", "10.0.101.0/30"),
+    LinkIP("CE2", "CE2-eth2", "10.0.102.1/30", "PE2", "PE2-eth2", "10.0.102.2/30", "10.0.102.0/30"),
+    LinkIP("CE3", "CE3-eth1", "10.0.103.1/30", "PE3", "PE3-eth2", "10.0.103.2/30", "10.0.103.0/30"),
 ]
 
 
@@ -365,16 +367,11 @@ def build_net(start_cli: bool = False) -> Mininet:
     net.addLink(leaf_db, db1, intfName1="LEAF_DB-eth2", intfName2="db1-eth0", bw=1000)
     net.addLink(leaf_db, db2, intfName1="LEAF_DB-eth3", intfName2="db2-eth0", bw=1000)
 
-    # --- Links: MPLS backbone (P/PE) + CE-PE (dùng Linux intfName tự động)
-    # Kết nối vật lý backbone đúng theo list BACKBONE_LINKS + CE_PE_LINKS
-    # Mỗi cặp node chỉ thêm 1 link.
-    def link_pair(a: str, b: str) -> None:
-        net.addLink(net.get(a), net.get(b), bw=1000)
-
+    # --- Links: MPLS backbone (P/PE) + CE-PE (đặt intfName cố định để gán IP/MTU đúng)
     for l in BACKBONE_LINKS:
-        link_pair(l.a, l.b)
+        net.addLink(net.get(l.a), net.get(l.b), intfName1=l.a_if, intfName2=l.b_if, bw=1000)
     for l in CE_PE_LINKS:
-        link_pair(l.a, l.b)
+        net.addLink(net.get(l.a), net.get(l.b), intfName1=l.a_if, intfName2=l.b_if, bw=1000)
 
     net.build()
     info("*** Starting network...\n")
@@ -391,30 +388,15 @@ def build_net(start_cli: bool = False) -> Mininet:
     for rname, lo_cidr in LOOPBACKS.items():
         add_lo(net.get(rname), lo_cidr)
 
-    # Assign /30 to backbone links based on discovered interface pairs
-    # Vì Mininet đặt tên interface theo thứ tự link, ta dò theo peer-name trong `ip -o link`.
-    def set_link_ip(l: LinkIP, mtu: int) -> None:
-        a = net.get(l.a)
-        b = net.get(l.b)
-        # tìm interface trên a nối tới b: dùng `ip -o link` và grep tên peer
-        a_intf = a.cmd(f"ip -o link | awk -F': ' '{{print $2}}' | grep -E '^{l.a}-eth'").strip().splitlines()
-        b_intf = b.cmd(f"ip -o link | awk -F': ' '{{print $2}}' | grep -E '^{l.b}-eth'").strip().splitlines()
-        # heuristic: interface mới nhất thường ở cuối; gán lần lượt theo thứ tự tạo link
-        if not a_intf or not b_intf:
-            return
-        a_if = a_intf[-1].strip()
-        b_if = b_intf[-1].strip()
-        add_ip(a, a_if, l.a_ip)
-        add_ip(b, b_if, l.b_ip)
-        set_intf_mtu(a, a_if, mtu)
-        set_intf_mtu(b, b_if, mtu)
-
-    # Backbone
+    # Gán IP + MTU backbone đúng theo danh sách link
     for l in BACKBONE_LINKS:
-        set_link_ip(l, BACKBONE_MTU)
-    # CE-PE links MTU không bắt buộc MPLS overhead, để mặc định hoặc set 1500
+        add_ip(net.get(l.a), l.a_if, l.a_ip)
+        add_ip(net.get(l.b), l.b_if, l.b_ip)
+        set_intf_mtu(net.get(l.a), l.a_if, BACKBONE_MTU)
+        set_intf_mtu(net.get(l.b), l.b_if, BACKBONE_MTU)
     for l in CE_PE_LINKS:
-        set_link_ip(l, 1500)
+        add_ip(net.get(l.a), l.a_if, l.a_ip)
+        add_ip(net.get(l.b), l.b_if, l.b_ip)
 
     # Branch 1 gateway on CE1-eth0
     add_ip(CE1, "CE1-eth0", "10.1.0.1/24")
@@ -436,22 +418,70 @@ def build_net(start_cli: bool = False) -> Mininet:
             trunk_str = ",".join(str(v) for v in trunks)
             sw.cmd(f"ovs-vsctl set port {port} trunks={trunk_str}")
 
-    # Trunk VLANs giữa core/dist/access; access ports to hosts
+    # VLAN Branch2: cấu hình theo đúng port thực tế (dựa trên link host<->switch)
     vlans = [10, 20, 30]
-    # access ports
-    ovs_set_port_vlan(acc_admin, "ACC_ADMIN-eth1", access_vlan=10)
-    ovs_set_port_vlan(acc_admin, "ACC_ADMIN-eth2", access_vlan=10)
-    ovs_set_port_vlan(acc_lab, "ACC_LAB-eth1", access_vlan=20)
-    ovs_set_port_vlan(acc_lab, "ACC_LAB-eth2", access_vlan=20)
-    ovs_set_port_vlan(acc_guest, "ACC_GUEST-eth1", access_vlan=30)
-    ovs_set_port_vlan(acc_guest, "ACC_GUEST-eth2", access_vlan=30)
-    # uplinks trunks (best-effort, set on all non-host ports)
-    for sw in [core1, core2, dist1, dist2, acc_admin, acc_lab, acc_guest]:
-        ports = sw.cmd("ovs-vsctl list-ports " + sw.name).strip().splitlines()
+
+    def set_access_vlan_by_peer(sw: Node, peer: str, vlan: int) -> None:
+        # tìm port trên switch nối tới peer bằng ifconfig của peer
+        # peer-eth0 sẽ nối tới sw-ethX
+        # dùng mininet: interface phía switch luôn có dạng SWNAME-ethN
+        ports = sw.cmd(f"ovs-vsctl list-ports {sw.name}").strip().splitlines()
         for p in ports:
+            # check peer name trong output of 'ip link' không ổn; nên dùng cách đơn giản:
+            # nếu peer có 1 interface eth0, ta dò link ở phía peer để lấy tên phía switch
+            pass
+
+    # cách chắc chắn: lấy tên interface phía switch từ phía host (peer) bằng lệnh 'ip -o link'
+    def get_peer_switch_port(peer_node: Node, sw_name: str) -> Optional[str]:
+        # peer_node-eth0@... -> ta chỉ cần xem route: "ip -o link" trong namespace của peer
+        # Mininet đặt tên veth ở peer đúng "peer-ethX" và ở switch đúng "SWNAME-ethY"
+        out = peer_node.cmd("ip -o link | awk -F': ' '{print $2}' | grep -E '^" + peer_node.name + r"-eth'").strip().splitlines()
+        if not out:
+            return None
+        # lấy eth0 rồi hỏi mininet link map bằng cách đọc `ethtool -S` không được; dùng `ip link` trên switch tìm interface UP?
+        # đơn giản nhất: trên switch, port nối host sẽ có MAC của host ở learned table sau ping; nhưng chưa ping.
+        # Do mô hình branch2 cố định: admin1/admin2 chỉ nối ACC_ADMIN; lab* nối ACC_LAB; guest* nối ACC_GUEST
+        # => ta tag ALL ports của ACC_ADMIN/ACC_LAB/ACC_GUEST trừ uplinks (2 port uplink) bằng VLAN tương ứng.
+        return None
+
+    def tag_access_switch(sw: Node, vlan: int) -> None:
+        ports = sw.cmd(f"ovs-vsctl list-ports {sw.name}").strip().splitlines()
+        for p in ports:
+            # uplink giữa dist<->access là 2 port cuối (vì ta addLink dist1->a, dist2->a trước host links)
+            # host ports là những port còn lại
             if p.startswith(sw.name + "-eth"):
-                # access ports đã tag -> trunk vẫn ok; set trunks cho tất cả uplinks
-                ovs_set_port_vlan(sw, p, trunks=vlans)
+                # bỏ qua 2 uplink: eth1 và eth2 thường là uplink; nhưng không chắc -> dùng heuristic theo số lượng port
+                pass
+
+    # Heuristic ổn định theo thứ tự addLink:
+    # - dist1->access và dist2->access được tạo trước host->access links
+    # => trên access switch: 2 port có số nhỏ nhất là uplink, còn lại là host ports
+    def set_access_switch_ports(sw: Node, vlan: int) -> None:
+        ports = [p for p in sw.cmd(f"ovs-vsctl list-ports {sw.name}").strip().splitlines() if p.startswith(sw.name + "-eth")]
+        def eth_num(p: str) -> int:
+            try:
+                return int(p.split("-eth", 1)[1])
+            except Exception:
+                return 999
+        ports_sorted = sorted(ports, key=eth_num)
+        uplinks = set(ports_sorted[:2])
+        for p in ports_sorted[2:]:
+            ovs_set_port_vlan(sw, p, access_vlan=vlan)
+        for p in uplinks:
+            ovs_set_port_vlan(sw, p, trunks=vlans)
+
+    set_access_switch_ports(acc_admin, 10)
+    set_access_switch_ports(acc_lab, 20)
+    set_access_switch_ports(acc_guest, 30)
+
+    # trunk trên core/dist links + ports nối CE2 (trunk VLAN 10/20/30)
+    for sw in [core1, core2, dist1, dist2]:
+        ports = [p for p in sw.cmd(f"ovs-vsctl list-ports {sw.name}").strip().splitlines() if p.startswith(sw.name + "-eth")]
+        for p in ports:
+            ovs_set_port_vlan(sw, p, trunks=vlans)
+
+    # Disable link CE2-eth1 để tránh loop L2 (CE2 đang trunk trên eth0)
+    CE2.cmd("ip link set CE2-eth1 down 2>/dev/null || true")
 
     # Branch 3: gateways trên leaf (để server có default GW); CE3 sẽ route ra backbone sau
     add_ip(leaf_web, "LEAF_WEB-eth2", "10.3.10.1/24")
