@@ -194,8 +194,16 @@ class FrrRouter(Node):
           router ospf
           ...
         """
-        safe = cmds.replace('"', '\\"')
-        return self.cmd(f'vtysh -c "enable" -c "{safe}" 2>/dev/null')
+        # vtysh không xử lý tốt nhiều dòng trong 1 tham số `-c`,
+        # nên tách từng dòng thành nhiều `-c` để đảm bảo apply được cấu hình.
+        lines = [l.strip() for l in cmds.splitlines() if l.strip() and not l.strip().startswith("#")]
+        if not lines:
+            return ""
+        parts: List[str] = ['vtysh', '-c', '"enable"']
+        for l in lines:
+            safe = l.replace('"', '\\"')
+            parts += ['-c', f'"{safe}"']
+        return self.cmd(" ".join(parts) + " 2>/dev/null")
 
     def terminate(self):
         # kill daemon nếu có
@@ -610,7 +618,7 @@ def build_net(start_cli: bool = False) -> Mininet:
         ldp_cfg(r, lsr)
 
     info("*** Chờ hội tụ OSPF + LDP (60s)...\n")
-    time.sleep(60)
+    time.sleep(45)
 
     info("*** Topology Phase 1 ready.\n")
     if start_cli:
