@@ -593,7 +593,9 @@ def build_net(start_cli: bool = False) -> Mininet:
 
         # Tạm thời để liên chi nhánh ping thông: PE quảng bá static/connected vào underlay
         if router.name.startswith("PE"):
-            lines += ["redistribute connected", "redistribute static"]
+            # Lưu ý: các route về LAN khách hàng đang được thêm bằng `ip route add` (kernel),
+            # nên cần redistribute kernel để backbone học được.
+            lines += ["redistribute connected", "redistribute static", "redistribute kernel"]
         lines += ["exit"]
         for i in intfs:
             lines += [f"interface {i}", "ip ospf area 0", "exit"]
@@ -619,7 +621,8 @@ def build_net(start_cli: bool = False) -> Mininet:
             "ip -o link | awk -F': ' '{print $2}' | grep -E '^" + router.name + r"-eth'"
         ).strip().splitlines()
         intfs = sorted({i.split('@', 1)[0].strip() for i in raw if i.strip()})
-        lines = ["conf t", f"mpls ldp", f"router-id {lsr_id}", "exit"]
+        # FRR: LDP cấu hình theo `mpls ldp` (global) + enable per-interface
+        lines = ["conf t", "mpls ldp", f"router-id {lsr_id}", "exit"]
         for i in intfs:
             lines += [f"interface {i}", "mpls ldp", "exit"]
         lines += ["end", "write memory"]
