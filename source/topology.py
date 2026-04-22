@@ -29,6 +29,28 @@ from mininet.log import setLogLevel, info
 # Helpers
 # =========================
 
+def dpid_hex(n: int) -> str:
+    """Return 16-hex-digit datapath ID for OVS switches."""
+    return f"{n:016x}"
+
+
+_DPID_COUNTER = 1
+
+
+def add_ovs_switch(net: Mininet, name: str, *, stp: bool = False) -> OVSSwitch:
+    """Add OVSSwitch with explicit DPID (non-canonical names supported)."""
+    global _DPID_COUNTER
+    sw = net.addSwitch(
+        name,
+        cls=OVSSwitch,
+        failMode="standalone",
+        stp=stp,
+        dpid=dpid_hex(_DPID_COUNTER),
+    )
+    _DPID_COUNTER += 1
+    return sw
+
+
 def sh(cmd: List[str], check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=check)
 
@@ -44,7 +66,6 @@ def cleanup_mininet() -> None:
 def ensure_mpls_kernel() -> None:
     """
     Bắt buộc: nạp module MPLS trước khi Mininet start.
-    (Theo node.txt)
     """
     for mod in ("mpls_router", "mpls_iptunnel"):
         sh(["sudo", "modprobe", mod], check=False)
@@ -269,21 +290,21 @@ def build_net(start_cli: bool = False) -> Mininet:
     CE3 = net.addHost("CE3", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
 
     # --- Branch 1 (Flat)
-    sw_flat_a = net.addSwitch("SW_FLAT_A", cls=OVSSwitch, failMode="standalone")
-    sw_flat_b = net.addSwitch("SW_FLAT_B", cls=OVSSwitch, failMode="standalone")
+    sw_flat_a = add_ovs_switch(net, "SW_FLAT_A")
+    sw_flat_b = add_ovs_switch(net, "SW_FLAT_B")
     h1 = net.addHost("host1", ip="10.1.0.11/24", defaultRoute="via 10.1.0.1")
     h2 = net.addHost("host2", ip="10.1.0.12/24", defaultRoute="via 10.1.0.1")
     h3 = net.addHost("host3", ip="10.1.0.13/24", defaultRoute="via 10.1.0.1")
     h4 = net.addHost("host4", ip="10.1.0.14/24", defaultRoute="via 10.1.0.1")
 
     # --- Branch 2 (3-layer)
-    core1 = net.addSwitch("CORE_1", cls=OVSSwitch, failMode="standalone", stp=True)
-    core2 = net.addSwitch("CORE_2", cls=OVSSwitch, failMode="standalone", stp=True)
-    dist1 = net.addSwitch("DIST_1", cls=OVSSwitch, failMode="standalone", stp=True)
-    dist2 = net.addSwitch("DIST_2", cls=OVSSwitch, failMode="standalone", stp=True)
-    acc_admin = net.addSwitch("ACC_ADMIN", cls=OVSSwitch, failMode="standalone", stp=True)
-    acc_lab = net.addSwitch("ACC_LAB", cls=OVSSwitch, failMode="standalone", stp=True)
-    acc_guest = net.addSwitch("ACC_GUEST", cls=OVSSwitch, failMode="standalone", stp=True)
+    core1 = add_ovs_switch(net, "CORE_1", stp=True)
+    core2 = add_ovs_switch(net, "CORE_2", stp=True)
+    dist1 = add_ovs_switch(net, "DIST_1", stp=True)
+    dist2 = add_ovs_switch(net, "DIST_2", stp=True)
+    acc_admin = add_ovs_switch(net, "ACC_ADMIN", stp=True)
+    acc_lab = add_ovs_switch(net, "ACC_LAB", stp=True)
+    acc_guest = add_ovs_switch(net, "ACC_GUEST", stp=True)
     admin1 = net.addHost("admin1", ip="10.2.10.11/24", defaultRoute="via 10.2.10.1")
     admin2 = net.addHost("admin2", ip="10.2.10.12/24", defaultRoute="via 10.2.10.1")
     lab1 = net.addHost("lab1", ip="10.2.20.11/24", defaultRoute="via 10.2.20.1")
@@ -292,7 +313,7 @@ def build_net(start_cli: bool = False) -> Mininet:
     guest2 = net.addHost("guest2", ip="10.2.30.12/24", defaultRoute="via 10.2.30.1")
 
     # --- Branch 3 (Leaf-Spine)
-    agg = net.addSwitch("AGG_EDGE", cls=OVSSwitch, failMode="standalone", stp=True)
+    agg = add_ovs_switch(net, "AGG_EDGE", stp=True)
     spine1 = net.addHost("SPINE1", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
     spine2 = net.addHost("SPINE2", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
     leaf_web = net.addHost("LEAF_WEB", cls=FrrRouter, ip="0.0.0.0/32", enable_ospf=False, enable_ldp=False)
