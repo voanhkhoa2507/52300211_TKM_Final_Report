@@ -624,7 +624,7 @@ def build_net(start_cli: bool = False) -> Mininet:
         ldp_cfg(r, lsr)
 
     info("*** Chờ hội tụ OSPF + LDP (60s)...\n")
-    time.sleep(45)
+    time.sleep(60)
 
     info("*** Topology Phase 1 ready.\n")
     if start_cli:
