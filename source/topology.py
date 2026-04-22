@@ -7,9 +7,6 @@ Mục tiêu:
 - Kết nối 3 chi nhánh (Flat / 3-layer / Leaf-Spine) qua MPLS backbone (P/PE)
 - Chuẩn bị nền cấu hình FRR: OSPF underlay + LDP trên backbone; VPLS sẽ cấu hình ở phase sau (hoặc mở rộng).
 
-Lưu ý môi trường:
-- File này chạy trên Linux (Ubuntu/VM) có Mininet + FRR.
-- Windows host sẽ không chạy trực tiếp Mininet.
 """
 
 from __future__ import annotations
