@@ -82,7 +82,11 @@ def set_intf_mtu(node: Node, intf: str, mtu: int) -> None:
 def add_ip(node: Node, intf: str, cidr: str) -> None:
     node.cmd(f"ip link set {intf} up")
     node.cmd(f"ip addr flush dev {intf}")
-    node.cmd(f"ip addr add {cidr} dev {intf}")
+    # Dùng Mininet API để `dump`/Intf update đúng (tránh hiện None)
+    try:
+        node.setIP(cidr, intf=intf)
+    except Exception:
+        node.cmd(f"ip addr add {cidr} dev {intf}")
 
 
 def add_lo(node: Node, cidr: str) -> None:
@@ -484,12 +488,21 @@ def build_net(start_cli: bool = False) -> Mininet:
     CE2.cmd("ip link set CE2-eth1 down 2>/dev/null || true")
 
     # Branch 3: gateways trên leaf (để server có default GW); CE3 sẽ route ra backbone sau
-    add_ip(leaf_web, "LEAF_WEB-eth2", "10.3.10.1/24")
-    add_ip(leaf_web, "LEAF_WEB-eth3", "10.3.10.1/24")
-    add_ip(leaf_dns, "LEAF_DNS-eth2", "10.3.20.1/24")
-    add_ip(leaf_dns, "LEAF_DNS-eth3", "10.3.20.1/24")
-    add_ip(leaf_db, "LEAF_DB-eth2", "10.3.30.1/24")
-    add_ip(leaf_db, "LEAF_DB-eth3", "10.3.30.1/24")
+    # Leaf trong mô hình đang là router Linux, nên để 2 host cùng VLAN ping nhau
+    # ta cần bridge L2 giữa các cổng host-facing trên mỗi leaf.
+    def mk_bridge(leaf: Node, br: str, ports: List[str], gw_cidr: str) -> None:
+        leaf.cmd(f"ip link add name {br} type bridge 2>/dev/null || true")
+        leaf.cmd(f"ip link set {br} up")
+        for p in ports:
+            leaf.cmd(f"ip link set {p} up")
+            leaf.cmd(f"ip addr flush dev {p}")
+            leaf.cmd(f"ip link set {p} master {br}")
+        leaf.cmd(f"ip addr flush dev {br}")
+        leaf.cmd(f"ip addr add {gw_cidr} dev {br} 2>/dev/null || true")
+
+    mk_bridge(leaf_web, "br-web", ["LEAF_WEB-eth2", "LEAF_WEB-eth3"], "10.3.10.1/24")
+    mk_bridge(leaf_dns, "br-dns", ["LEAF_DNS-eth2", "LEAF_DNS-eth3"], "10.3.20.1/24")
+    mk_bridge(leaf_db, "br-db", ["LEAF_DB-eth2", "LEAF_DB-eth3"], "10.3.30.1/24")
 
     # Route từ leaf -> CE3 (qua spine/agg): tạm thời default route về CE3 qua AGG_EDGE L2 domain.
     # Gán IP L3 giữa CE3 và leaf domain (mô phỏng đơn giản, vẫn giữ link vật lý).
