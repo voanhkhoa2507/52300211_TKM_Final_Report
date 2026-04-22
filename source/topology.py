@@ -578,7 +578,11 @@ def build_net(start_cli: bool = False) -> Mininet:
     def ospf_cfg(router: FrrRouter, rid: str, *, no_passive: Optional[List[str]] = None, extra_ifaces: Optional[List[str]] = None) -> None:
         # enable ospf, passive-interface default; no passive on backbone eth; advertise lo + p2p
         # đơn giản: đưa toàn bộ interface eth* + lo vào OSPF area 0
-        intfs = router.cmd("ip -o link | awk -F': ' '{print $2}' | grep -E '^" + router.name + r"-eth'").strip().splitlines()
+        raw = router.cmd(
+            "ip -o link | awk -F': ' '{print $2}' | grep -E '^" + router.name + r"-eth'"
+        ).strip().splitlines()
+        # `ip -o link` thường trả dạng `eth0@if123`; FRR cần tên thật trước dấu '@'
+        intfs = sorted({i.split('@', 1)[0].strip() for i in raw if i.strip()})
         if extra_ifaces:
             intfs = list(dict.fromkeys(intfs + extra_ifaces))
         lines = ["conf t", "router ospf", f"ospf router-id {rid}", "passive-interface default"]
@@ -611,7 +615,10 @@ def build_net(start_cli: bool = False) -> Mininet:
 
     # LDP: bật trên các interface backbone eth* của P/PE
     def ldp_cfg(router: FrrRouter, lsr_id: str) -> None:
-        intfs = router.cmd("ip -o link | awk -F': ' '{print $2}' | grep -E '^" + router.name + r"-eth'").strip().splitlines()
+        raw = router.cmd(
+            "ip -o link | awk -F': ' '{print $2}' | grep -E '^" + router.name + r"-eth'"
+        ).strip().splitlines()
+        intfs = sorted({i.split('@', 1)[0].strip() for i in raw if i.strip()})
         lines = ["conf t", f"mpls ldp", f"router-id {lsr_id}", "exit"]
         for i in intfs:
             lines += [f"interface {i}", "mpls ldp", "exit"]
@@ -623,8 +630,8 @@ def build_net(start_cli: bool = False) -> Mininet:
         lsr = LOOPBACKS[rname].split("/")[0]
         ldp_cfg(r, lsr)
 
-    info("*** Chờ hội tụ OSPF + LDP (60s)...\n")
-    time.sleep(60)
+    info("*** Chờ hội tụ OSPF + LDP (45s)...\n")
+    time.sleep(45)
 
     info("*** Topology Phase 1 ready.\n")
     if start_cli:
