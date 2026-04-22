@@ -608,7 +608,8 @@ def build_net(start_cli: bool = False) -> Mininet:
         ospf_cfg(r, rid)
 
     # OSPF trong Branch 3 (Leaf-Spine): bật trên underlay ports; bridge VLAN chỉ advertise (passive)
-    ospf_cfg(net.get("CE3"), LOOPBACKS["CE3"].split("/")[0], no_passive=["CE3-eth0"], extra_ifaces=[])
+    # CE3 phải hình thành adjacency OSPF với PE3 (CE3-eth1) để học route liên chi nhánh
+    ospf_cfg(net.get("CE3"), LOOPBACKS["CE3"].split("/")[0], no_passive=["CE3-eth0", "CE3-eth1"], extra_ifaces=[])
     ospf_cfg(net.get("SPINE1"), LOOPBACKS["SPINE1"].split("/")[0], no_passive=["SPINE1-eth0", "SPINE1-eth1", "SPINE1-eth2", "SPINE1-eth3"])
     ospf_cfg(net.get("SPINE2"), LOOPBACKS["SPINE2"].split("/")[0], no_passive=["SPINE2-eth0", "SPINE2-eth1", "SPINE2-eth2", "SPINE2-eth3"])
     ospf_cfg(net.get("LEAF_WEB"), LOOPBACKS["LEAF_WEB"].split("/")[0], no_passive=["LEAF_WEB-eth0", "LEAF_WEB-eth1"], extra_ifaces=["br-web"])
