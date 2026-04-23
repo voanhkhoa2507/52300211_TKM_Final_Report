@@ -35,8 +35,22 @@ except Exception:
     HAS_MPL = False
 
 
-# Chạy dạng script: `python3 source/tool.py` -> import topology trong cùng thư mục source
-from topology import build_net  # type: ignore  # noqa: E402
+def _load_build_net():
+    """
+    Luôn load đúng `52300211_TKM_Final_Report/source/topology.py` bằng đường dẫn tuyệt đối,
+    tránh trường hợp Python import nhầm module `topology` ở chỗ khác trong PYTHONPATH.
+    """
+    import importlib.util
+
+    topo_path = (Path(__file__).resolve().parent / "topology.py").resolve()
+    spec = importlib.util.spec_from_file_location("tkm_topology", topo_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Không load được topology từ {topo_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+    if not hasattr(mod, "build_net"):
+        raise RuntimeError(f"File topology không có build_net(): {topo_path}")
+    return mod.build_net
 
 
 THIS_DIR = Path(__file__).resolve().parent
@@ -196,6 +210,7 @@ def main() -> None:
     print(f"[INFO] image: {IMG_DIR}")
 
     # Build topology (Phase 1)
+    build_net = _load_build_net()
     net = build_net(start_cli=False)
     interrupted = False
     try:
@@ -209,6 +224,23 @@ def main() -> None:
             ("host1", "web1", "10.3.10.11"),
             ("admin1", "web1", "10.3.10.11"),
         ]
+
+        # Đợi routing hội tụ thật sự (OSPF/LDP) trước khi đo.
+        # Nếu ping không thông thì chờ thêm để tránh "Network is unreachable" do chưa hội tụ.
+        def _wait_reachability(src_name: str, dst_ip: str, max_wait_s: int = 90) -> bool:
+            src = net.get(src_name)
+            deadline = time.time() + max_wait_s
+            while time.time() < deadline:
+                pr, _ = _ping(src, dst_ip=dst_ip, count=1, interval=0.1, timeout_s=1)
+                if pr.received >= 1:
+                    return True
+                time.sleep(2)
+            return False
+
+        # Warm-up: đảm bảo 2 đích quan trọng reachable từ host1
+        for dst_ip in ("10.2.10.11", "10.3.10.11"):
+            ok = _wait_reachability("host1", dst_ip, max_wait_s=90)
+            print(f"[INFO] warm-up host1→{dst_ip}: {'OK' if ok else 'FAIL'}")
 
         has_iperf = _has_iperf3(host1)
         if not has_iperf:
