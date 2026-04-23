@@ -100,29 +100,44 @@ def _sh(cmd: str, timeout_s: int = 20) -> str:
     return p.stdout
 
 
-def exec_netns(node: str, cmd: str, timeout_s: int = 20) -> str:
-    return _sh(f"sudo ip netns exec {node} {cmd}", timeout_s=timeout_s)
+def _get_node_pid(node: str) -> Optional[int]:
+    """
+    Mininet thường KHÔNG tạo named-netns cho `ip netns list`.
+    Cách chuẩn để vào namespace node là tìm PID của node shell (mnexec) và dùng `mnexec -a <pid>`.
+    """
+    # Ưu tiên pattern mnexec -n <node>
+    out = _sh(f"pgrep -a -f \"mnexec .* -n {node}( |$)\" | head -n 1", timeout_s=5).strip()
+    if out:
+        try:
+            return int(out.split(" ", 1)[0])
+        except Exception:
+            pass
+    # Fallback: đôi khi dạng `mnexec -n node`
+    out = _sh(f"pgrep -a -f \"mnexec -n {node}( |$)\" | head -n 1", timeout_s=5).strip()
+    if out:
+        try:
+            return int(out.split(" ", 1)[0])
+        except Exception:
+            pass
+    return None
 
 
-def list_netns() -> List[str]:
-    out = _sh("sudo ip netns list", timeout_s=10)
-    ns = []
-    for line in out.splitlines():
-        name = line.strip().split(" ", 1)[0]
-        if name:
-            ns.append(name)
-    return ns
+def exec_node(node: str, cmd: str, timeout_s: int = 20) -> str:
+    pid = _get_node_pid(node)
+    if pid is None:
+        return f"[tool] Không tìm thấy PID của node `{node}`. Hãy chắc chắn đang mở `mininet>`.\n"
+    return _sh(f"sudo mnexec -a {pid} {cmd}", timeout_s=timeout_s)
 
 
 def ensure_namespaces_ready(required: List[str]) -> Tuple[bool, str]:
-    ns = set(list_netns())
-    missing = [n for n in required if n not in ns]
+    missing = [n for n in required if _get_node_pid(n) is None]
     if missing:
         return (
             False,
-            "Không thấy namespace của các node sau:\n"
+            "Không thấy Mininet process (PID) của các node sau:\n"
             + "\n".join(missing)
-            + "\n\nBạn cần chạy `sudo python3 source/topology.py` và giữ nguyên cửa sổ `mininet>` trước khi mở tool.",
+            + "\n\nBạn cần chạy `sudo python3 source/topology.py` và giữ nguyên cửa sổ `mininet>` trước khi mở tool.\n"
+            + "Lưu ý: tool dùng `mnexec -a <pid>` (không dùng `ip netns`).",
         )
     return True, "OK"
 
@@ -136,12 +151,12 @@ def parse_ping_stats(ping_out: str) -> Optional[PingStats]:
 
 
 def ping_test(src: str, dst_ip: str, count: int = 5) -> Tuple[Optional[PingStats], str]:
-    out = exec_netns(src, f"ping -c {count} -W 1 -q {dst_ip}", timeout_s=10 + count)
+    out = exec_node(src, f"ping -c {count} -W 1 -q {dst_ip}", timeout_s=10 + count)
     return parse_ping_stats(out), out
 
 
 def traceroute_path(src: str, dst_ip: str, max_hops: int = 12) -> Tuple[List[str], str]:
-    out = exec_netns(src, f"traceroute -n -q 1 -w 1 -m {max_hops} {dst_ip}", timeout_s=30)
+    out = exec_node(src, f"traceroute -n -q 1 -w 1 -m {max_hops} {dst_ip}", timeout_s=30)
     hops = []
     for line in out.splitlines()[1:]:
         parts = line.split()
@@ -151,10 +166,10 @@ def traceroute_path(src: str, dst_ip: str, max_hops: int = 12) -> Tuple[List[str
 
 
 def iperf3_throughput_mbps(src: str, dst: str, dst_ip: str, seconds: int = 3, port: int = 5201) -> Tuple[Optional[float], str]:
-    exec_netns(dst, "pkill -f 'iperf3 -s' 2>/dev/null || true", timeout_s=5)
-    exec_netns(dst, f"iperf3 -s -1 -p {port} >/tmp/iperf3_{dst}_{port}.log 2>&1 &", timeout_s=5)
+    exec_node(dst, "pkill -f 'iperf3 -s' 2>/dev/null || true", timeout_s=5)
+    exec_node(dst, f"iperf3 -s -1 -p {port} >/tmp/iperf3_{dst}_{port}.log 2>&1 &", timeout_s=5)
     time.sleep(0.2)
-    out = exec_netns(src, f"iperf3 -c {dst_ip} -t {seconds} -p {port} -J 2>&1", timeout_s=seconds + 10)
+    out = exec_node(src, f"iperf3 -c {dst_ip} -t {seconds} -p {port} -J 2>&1", timeout_s=seconds + 10)
     m = re.search(r'"bits_per_second"\s*:\s*([\d\.]+)', out)
     if not m:
         return None, out
@@ -329,11 +344,11 @@ class App(tk.Tk):
             total_s = 80
             self._log(f"[CASE1] OSPF restart on {spine}. Traffic: {src} -> db1 ({dst_ip})")
 
-            exec_netns(src, "pkill -f 'ping ' 2>/dev/null || true", timeout_s=5)
-            exec_netns(src, f"nohup sh -c 'ping -i 0.02 -s 1400 {dst_ip} >/dev/null 2>&1' >/tmp/case1_ping.log 2>&1 &", timeout_s=5)
+            exec_node(src, "pkill -f 'ping ' 2>/dev/null || true", timeout_s=5)
+            exec_node(src, f"nohup sh -c 'ping -i 0.02 -s 1400 {dst_ip} >/dev/null 2>&1' >/tmp/case1_ping.log 2>&1 &", timeout_s=5)
 
             def tx_bytes() -> int:
-                out = exec_netns(spine, "cat /sys/class/net/SPINE1-eth1/statistics/tx_bytes 2>/dev/null || echo 0", timeout_s=3)
+                out = exec_node(spine, "cat /sys/class/net/SPINE1-eth1/statistics/tx_bytes 2>/dev/null || echo 0", timeout_s=3)
                 try:
                     return int(out.strip().splitlines()[-1])
                 except Exception:
@@ -351,13 +366,13 @@ class App(tk.Tk):
                 mbps.append(m)
 
                 if t == off_start:
-                    exec_netns(spine, "test -f /tmp/SPINE1/ospfd.pid && kill -9 $(cat /tmp/SPINE1/ospfd.pid) 2>/dev/null || true", timeout_s=5)
+                    exec_node(spine, "test -f /tmp/SPINE1/ospfd.pid && kill -9 $(cat /tmp/SPINE1/ospfd.pid) 2>/dev/null || true", timeout_s=5)
                     self._log("  -> Đã tắt ospfd SPINE1 tại t=5s")
                 if t == off_end:
-                    exec_netns(spine, "/usr/lib/frr/ospfd -d -A 127.0.0.1 -z /tmp/SPINE1/run/zserv.api --vty_socket /tmp/SPINE1/run -f /tmp/SPINE1/ospfd.conf -i /tmp/SPINE1/ospfd.pid >/dev/null 2>&1", timeout_s=5)
+                    exec_node(spine, "/usr/lib/frr/ospfd -d -A 127.0.0.1 -z /tmp/SPINE1/run/zserv.api --vty_socket /tmp/SPINE1/run -f /tmp/SPINE1/ospfd.conf -i /tmp/SPINE1/ospfd.pid >/dev/null 2>&1", timeout_s=5)
                     self._log("  -> Đã bật lại ospfd SPINE1 tại t=15s")
 
-            exec_netns(src, "pkill -f 'ping -i 0.02' 2>/dev/null || true", timeout_s=5)
+            exec_node(src, "pkill -f 'ping -i 0.02' 2>/dev/null || true", timeout_s=5)
 
             ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
             out_png = IMG_DIR / f"case1_ospf_convergence_{ts}.png"
