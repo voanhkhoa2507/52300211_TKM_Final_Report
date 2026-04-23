@@ -126,8 +126,8 @@ class FrrRouter(Node):
         # Nếu có MPLS (P/PE) thì set platform_labels
         if self.enable_ldp:
             sysctl(self, "net.mpls.platform_labels", "100000")
-            # bật MPLS input cho mọi interface (an toàn, không cần liệt kê trước)
-            self.cmd("for i in $(ls /sys/class/net | grep -v lo); do sysctl -w net.mpls.conf.$i.input=1 >/dev/null 2>&1; done")
+            # Lưu ý: interface eth* có thể chưa tồn tại tại thời điểm config().
+            # Ta sẽ bật MPLS input lần nữa sau khi net.start() (xem enable_mpls_inputs()).
 
         # Chuẩn bị thư mục config FRR
         self.cmd(f"rm -rf {self.frr_conf_dir} && mkdir -p {self.frr_conf_dir}")
@@ -429,6 +429,18 @@ def build_net(start_cli: bool = False) -> Mininet:
         add_ip(net.get(l.a), l.a_if, l.a_ip)
         add_ip(net.get(l.b), l.b_if, l.b_ip)
 
+    # Sau khi đã có interface thật, bật MPLS input cho các router backbone (P/PE)
+    def enable_mpls_inputs(router: FrrRouter) -> None:
+        # chỉ bật trên các cổng eth* (backbone/CE-PE), đủ để label switching hoạt động
+        intfs = router.cmd(
+            "ip -o link | awk -F': ' '{print $2}' | grep -E '^" + router.name + r"-eth' | sed 's/@.*//'"
+        ).strip().splitlines()
+        for i in intfs:
+            sysctl(router, f"net.mpls.conf.{i}.input", "1")
+
+    for rname in ("P1", "P2", "P3", "P4", "PE1", "PE2", "PE3"):
+        enable_mpls_inputs(net.get(rname))
+
     # Branch 1 gateway on CE1-eth0
     add_ip(CE1, "CE1-eth0", "10.1.0.1/24")
 
@@ -622,11 +634,17 @@ def build_net(start_cli: bool = False) -> Mininet:
             "ip -o link | awk -F': ' '{print $2}' | grep -E '^" + router.name + r"-eth'"
         ).strip().splitlines()
         intfs = sorted({i.split('@', 1)[0].strip() for i in raw if i.strip()})
-        # FRR: LDP cấu hình theo `mpls ldp` (global) + enable per-interface
-        lines = ["conf t", "mpls ldp", f"router-id {lsr_id}", "exit"]
+        # FRR 8.x: cấu hình LDP trong address-family ipv4 và enable trên interface
+        lines = [
+            "conf t",
+            "mpls ldp",
+            f"router-id {lsr_id}",
+            "address-family ipv4",
+            f"discovery transport-address {lsr_id}",
+        ]
         for i in intfs:
-            lines += [f"interface {i}", "mpls ldp", "exit"]
-        lines += ["end", "write memory"]
+            lines += [f"interface {i}"]
+        lines += ["exit-address-family", "end", "write memory"]
         router.vty("\n".join(lines))
 
     for rname in ("P1", "P2", "P3", "P4", "PE1", "PE2", "PE3"):
