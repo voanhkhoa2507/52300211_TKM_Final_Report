@@ -22,12 +22,17 @@ import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
-import matplotlib
+# Matplotlib có thể chưa được cài trong VM; vẫn cho phép chạy và xuất CSV/logs.
+HAS_MPL = True
+try:
+    import matplotlib
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt  # noqa: E402
+except Exception:
+    HAS_MPL = False
 
 
 # Chạy dạng script: `python3 source/tool.py` -> import topology trong cùng thư mục source
@@ -117,6 +122,8 @@ def _iperf3(src, dst_ip: str, seconds: int = 10, port: int = 5201) -> Tuple[Iper
 
 
 def _dark_style() -> None:
+    if not HAS_MPL:
+        return
     plt.style.use("dark_background")
     matplotlib.rcParams.update(
         {
@@ -137,6 +144,8 @@ def _save_csv(rows: List[Measurement], path: Path) -> None:
 
 
 def _plot_bars(title: str, labels: List[str], values: List[Optional[float]], ylabel: str, out_path: Path) -> None:
+    if not HAS_MPL:
+        return
     _dark_style()
     vals = [v if v is not None else 0.0 for v in values]
     fig, ax = plt.subplots()
@@ -151,6 +160,8 @@ def _plot_bars(title: str, labels: List[str], values: List[Optional[float]], yla
 
 def main() -> None:
     _ensure_dirs()
+    print(f"[INFO] logs:  {LOG_DIR}")
+    print(f"[INFO] image: {IMG_DIR}")
 
     # Build topology (Phase 1)
     net = build_net(start_cli=False)
@@ -166,9 +177,10 @@ def main() -> None:
             ("admin1", "web1", "10.3.10.11"),
         ]
 
-        # Basic availability checks
-        # iperf3 presence
-        _ = host1.cmd("iperf3 -v 2>/dev/null | head -n 1")
+        # Kiểm tra iperf3 có sẵn không (nếu không, throughput sẽ None và có raw_error)
+        iperf_ver = host1.cmd("iperf3 -v 2>/dev/null | head -n 1").strip()
+        if not iperf_ver:
+            print("[WARN] Không thấy `iperf3` trong VM. Sẽ chỉ có ping metrics (CSV vẫn được tạo).")
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         results: List[Measurement] = []
@@ -209,17 +221,25 @@ def main() -> None:
             (LOG_DIR / f"raw_ping_{ts}_{src_name}_to_{dst_name}.txt").write_text(ping_raw, encoding="utf-8")
             (LOG_DIR / f"raw_iperf3_{ts}_{src_name}_to_{dst_name}.json").write_text(iperf_raw, encoding="utf-8")
 
+            # in nhanh 1 dòng tóm tắt để user thấy tool đang chạy được
+            thr = f"{iperf_res.mbps:.2f} Mbps" if iperf_res.mbps is not None else "N/A"
+            rtt = f"{ping_res.rtt_avg_ms:.3f} ms" if ping_res.rtt_avg_ms is not None else "N/A"
+            jit = f"{ping_res.rtt_mdev_ms:.3f} ms" if ping_res.rtt_mdev_ms is not None else "N/A"
+            print(f"[MEAS] {src_name}→{dst_name} thr={thr} rtt={rtt} jitter={jit} loss={ping_res.loss_pct:.1f}%")
+
         csv_path = LOG_DIR / f"results_{ts}.csv"
         _save_csv(results, csv_path)
+        print(f"[OK] Saved CSV: {csv_path}")
 
         labels = [f"{r.src}→{r.dst}" for r in results]
-        _plot_bars("Throughput (iperf3)", labels, [r.throughput_mbps for r in results], "Mbps", IMG_DIR / f"throughput_{ts}.png")
-        _plot_bars("Delay (ping avg)", labels, [r.ping_avg_ms for r in results], "ms", IMG_DIR / f"delay_{ts}.png")
-        _plot_bars("Jitter (ping mdev)", labels, [r.ping_jitter_ms for r in results], "ms", IMG_DIR / f"jitter_{ts}.png")
-        _plot_bars("Packet loss (ping)", labels, [r.ping_loss_pct for r in results], "%", IMG_DIR / f"loss_{ts}.png")
-
-        print(f"[OK] Saved CSV: {csv_path}")
-        print(f"[OK] Saved charts to: {IMG_DIR}")
+        if HAS_MPL:
+            _plot_bars("Throughput (iperf3)", labels, [r.throughput_mbps for r in results], "Mbps", IMG_DIR / f"throughput_{ts}.png")
+            _plot_bars("Delay (ping avg)", labels, [r.ping_avg_ms for r in results], "ms", IMG_DIR / f"delay_{ts}.png")
+            _plot_bars("Jitter (ping mdev)", labels, [r.ping_jitter_ms for r in results], "ms", IMG_DIR / f"jitter_{ts}.png")
+            _plot_bars("Packet loss (ping)", labels, [r.ping_loss_pct for r in results], "%", IMG_DIR / f"loss_{ts}.png")
+            print(f"[OK] Saved charts to: {IMG_DIR}")
+        else:
+            print("[WARN] Matplotlib chưa có -> bỏ qua vẽ chart (chỉ có CSV + raw logs).")
     finally:
         net.stop()
 
