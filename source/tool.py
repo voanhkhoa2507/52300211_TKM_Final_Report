@@ -386,11 +386,20 @@ class App(tk.Tk):
                 mbps.append(m)
 
                 if t == off_start:
-                    exec_node(spine, "test -f /tmp/SPINE1/ospfd.pid && kill -9 $(cat /tmp/SPINE1/ospfd.pid) 2>/dev/null || true", timeout_s=5)
-                    self._log("  -> Đã tắt ospfd SPINE1 tại t=5s")
+                    # Không kill daemon (dễ làm mất trạng thái/config). Thay vào đó shutdown OSPF bằng vtysh.
+                    exec_node(
+                        spine,
+                        'vtysh --vty_socket /tmp/SPINE1/run -c "conf t" -c "router ospf" -c "shutdown" -c "end" 2>/dev/null || true',
+                        timeout_s=5,
+                    )
+                    self._log("  -> Đã shutdown OSPF trên SPINE1 tại t=5s")
                 if t == off_end:
-                    exec_node(spine, "/usr/lib/frr/ospfd -d -A 127.0.0.1 -z /tmp/SPINE1/run/zserv.api --vty_socket /tmp/SPINE1/run -f /tmp/SPINE1/ospfd.conf -i /tmp/SPINE1/ospfd.pid >/dev/null 2>&1", timeout_s=5)
-                    self._log("  -> Đã bật lại ospfd SPINE1 tại t=15s")
+                    exec_node(
+                        spine,
+                        'vtysh --vty_socket /tmp/SPINE1/run -c "conf t" -c "router ospf" -c "no shutdown" -c "end" 2>/dev/null || true',
+                        timeout_s=5,
+                    )
+                    self._log("  -> Đã no shutdown OSPF trên SPINE1 tại t=15s")
 
             exec_node(src, "pkill -f 'ping -i 0.02' 2>/dev/null || true", timeout_s=5)
 
