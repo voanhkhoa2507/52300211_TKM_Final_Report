@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
+import json
 
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
@@ -105,6 +106,17 @@ def _get_node_pid(node: str) -> Optional[int]:
     Mininet thường KHÔNG tạo named-netns cho `ip netns list`.
     Cách chuẩn để vào namespace node là tìm PID của node shell (mnexec) và dùng `mnexec -a <pid>`.
     """
+    # Ưu tiên đọc PID map do topology.py xuất ra
+    try:
+        p = Path("/tmp/tkm_mininet_pids.json")
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            v = data.get(node)
+            if isinstance(v, int) and v > 0:
+                return v
+    except Exception:
+        pass
+
     # Ưu tiên pattern mnexec -n <node>
     out = _sh(f"pgrep -a -f \"mnexec .* -n {node}( |$)\" | head -n 1", timeout_s=5).strip()
     if out:
@@ -114,6 +126,14 @@ def _get_node_pid(node: str) -> Optional[int]:
             pass
     # Fallback: đôi khi dạng `mnexec -n node`
     out = _sh(f"pgrep -a -f \"mnexec -n {node}( |$)\" | head -n 1", timeout_s=5).strip()
+    if out:
+        try:
+            return int(out.split(" ", 1)[0])
+        except Exception:
+            pass
+
+    # Fallback: đôi khi cmdline chứa "mininet:<node>"
+    out = _sh(f"pgrep -a -f \"mininet:{node}\" | head -n 1", timeout_s=5).strip()
     if out:
         try:
             return int(out.split(" ", 1)[0])

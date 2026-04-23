@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import subprocess
+import json
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -407,6 +408,15 @@ def build_net(start_cli: bool = False) -> Mininet:
     net.build()
     info("*** Starting network...\n")
     net.start()
+
+    # Xuất PID map để tool Phase 2 bám đúng instance đang chạy
+    try:
+        pid_map = {n.name: int(getattr(n, "pid", 0) or 0) for n in net.hosts + net.switches}
+        with open("/tmp/tkm_mininet_pids.json", "w", encoding="utf-8") as f:
+            json.dump(pid_map, f, indent=2, sort_keys=True)
+        info("*** Wrote PID map: /tmp/tkm_mininet_pids.json\n")
+    except Exception:
+        pass
 
     # =========================
     # Basic IP config
