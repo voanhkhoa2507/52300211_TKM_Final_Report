@@ -662,6 +662,55 @@ def build_net(start_cli: bool = False) -> Mininet:
         lsr = LOOPBACKS[rname].split("/")[0]
         ldp_cfg(r, lsr)
 
+    # =========================
+    # VPLS demo (Linux bridge + GRETAP between PEs)
+    # =========================
+    # Bật bằng biến môi trường để tránh làm ảnh hưởng phần L3 đang chạy ổn.
+    # Ví dụ:
+    #   sudo ENABLE_VPLS=1 python3 source/topology.py
+    def vpls_gretap_cfg() -> None:
+        if os.environ.get("ENABLE_VPLS", "0") != "1":
+            info("*** VPLS/GRETAP: disabled (set ENABLE_VPLS=1 to enable)\n")
+            return
+
+        info("*** VPLS/GRETAP: enabling full-mesh GRETAP + br-vpls on PE1/PE2/PE3...\n")
+
+        pe_names = ["PE1", "PE2", "PE3"]
+        pe_lo = {n: LOOPBACKS[n].split('/')[0] for n in pe_names}
+
+        def mk_bridge(pe: FrrRouter) -> None:
+            pe.cmd("ip link add br-vpls type bridge 2>/dev/null || true")
+            pe.cmd("ip link set dev br-vpls type bridge stp_state 1 2>/dev/null || true")
+            pe.cmd("ip link set br-vpls up")
+
+        def mk_gretap(local_pe: FrrRouter, local_ip: str, remote_ip: str, ifname: str) -> None:
+            local_pe.cmd(f"ip link del {ifname} 2>/dev/null || true")
+            local_pe.cmd(
+                f"ip link add {ifname} type gretap local {local_ip} remote {remote_ip} ttl 64 2>/dev/null || true"
+            )
+            local_pe.cmd(f"ip link set {ifname} up")
+            local_pe.cmd(f"ip link set {ifname} master br-vpls")
+
+        for a in pe_names:
+            mk_bridge(net.get(a))
+
+        pairs = [("PE1", "PE2"), ("PE1", "PE3"), ("PE2", "PE3")]
+        for a, b in pairs:
+            a_node = net.get(a)
+            b_node = net.get(b)
+            a_ip = pe_lo[a]
+            b_ip = pe_lo[b]
+            mk_gretap(a_node, a_ip, b_ip, f"gt_{a}_{b}")
+            mk_gretap(b_node, b_ip, a_ip, f"gt_{b}_{a}")
+
+        info(
+            "*** VPLS/GRETAP ready. Test:\n"
+            "    PE1 ip link show type gretap\n"
+            "    PE1 bridge fdb show br br-vpls\n"
+        )
+
+    vpls_gretap_cfg()
+
     info("*** Chờ hội tụ OSPF + LDP (45s)...\n")
     time.sleep(45)
 
