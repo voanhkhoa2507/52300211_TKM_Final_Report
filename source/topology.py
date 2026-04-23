@@ -118,6 +118,17 @@ class FrrRouter(Node):
     def config(self, **params):
         super().config(**params)
 
+        # Dọn firewall để tránh chặn ICMP/forwarding do rule còn sót (lab/demo trước đó)
+        # (an toàn cho mô hình Mininet; giúp ping liên chi nhánh không bị drop "mysterious")
+        self.cmd("iptables -P INPUT ACCEPT 2>/dev/null || true")
+        self.cmd("iptables -P FORWARD ACCEPT 2>/dev/null || true")
+        self.cmd("iptables -P OUTPUT ACCEPT 2>/dev/null || true")
+        self.cmd("iptables -F 2>/dev/null || true")
+        self.cmd("iptables -t nat -F 2>/dev/null || true")
+        self.cmd("iptables -t mangle -F 2>/dev/null || true")
+        self.cmd("iptables -t raw -F 2>/dev/null || true")
+        self.cmd("iptables -X 2>/dev/null || true")
+
         # Bật forwarding
         sysctl(self, "net.ipv4.ip_forward", "1")
 
