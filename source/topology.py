@@ -121,6 +121,11 @@ class FrrRouter(Node):
         # Bật forwarding
         sysctl(self, "net.ipv4.ip_forward", "1")
 
+        # Tắt rp_filter để tránh drop gói trong mô hình có ECMP/MPLS (đường đi và về khác nhau)
+        # rp_filter strict thường làm ping liên chi nhánh bị rớt dù route đã có.
+        sysctl(self, "net.ipv4.conf.all.rp_filter", "0")
+        sysctl(self, "net.ipv4.conf.default.rp_filter", "0")
+
         # Bật ECMP hash L4 (phục vụ Leaf-Spine branch)
         sysctl(self, "net.ipv4.fib_multipath_hash_policy", "1")
 
@@ -447,6 +452,8 @@ def build_net(start_cli: bool = False) -> Mininet:
         ).strip().splitlines()
         for i in intfs:
             sysctl(router, f"net.mpls.conf.{i}.input", "1")
+            # Đồng thời tắt rp_filter theo từng interface để chắc chắn không bị strict filter
+            sysctl(router, f"net.ipv4.conf.{i}.rp_filter", "0")
 
     for rname in ("P1", "P2", "P3", "P4", "PE1", "PE2", "PE3"):
         enable_mpls_inputs(net.get(rname))
