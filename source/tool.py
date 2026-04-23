@@ -97,28 +97,60 @@ def _parse_ping(out: str) -> PingResult:
     return PingResult(sent=sent, received=recv, loss_pct=loss, rtt_min_ms=rtt_min, rtt_avg_ms=rtt_avg, rtt_max_ms=rtt_max, rtt_mdev_ms=rtt_mdev)
 
 
+def _run_with_timeout(node, argv: List[str], timeout_s: float) -> Tuple[int, str]:
+    """
+    Chạy lệnh trong namespace của node bằng popen để tránh treo Mininet node.cmd().
+    Trả (returncode, stdout+stderr).
+    """
+    p = node.popen(argv, stdout=None, stderr=None)  # stdout/stderr mặc định pipe trong Mininet
+    try:
+        out, _ = p.communicate(timeout=timeout_s)
+    except Exception:
+        try:
+            p.kill()
+        except Exception:
+            pass
+        raise
+    # Mininet popen trả bytes hoặc str tuỳ phiên bản; normalize
+    if isinstance(out, bytes):
+        txt = out.decode(errors="ignore")
+    else:
+        txt = out or ""
+    return p.returncode or 0, txt
+
+
 def _ping(host, dst_ip: str, count: int = 20, interval: float = 0.05, timeout_s: int = 2) -> Tuple[PingResult, str]:
-    cmd = f"ping -c {count} -i {interval} -W {timeout_s} {dst_ip}"
-    out = host.cmd(cmd)
+    # timeout tổng: count * (interval+timeout_s) + buffer
+    total = float(count) * (float(interval) + float(timeout_s)) + 3.0
+    argv = ["ping", "-c", str(count), "-i", str(interval), "-W", str(timeout_s), dst_ip]
+    try:
+        _, out = _run_with_timeout(host, argv, timeout_s=total)
+    except Exception as e:
+        out = f"[tool] ping timeout/error: {e}"
     return _parse_ping(out), out
 
 
-def _iperf3(src, dst_ip: str, seconds: int = 10, port: int = 5201) -> Tuple[IperfResult, str, str]:
-    # Server on destination: -1 (one test), JSON not needed on server
-    server_out = src.cmd("true")  # placeholder to keep return types stable
-    # Start server on remote via Mininet: run in background on dst host namespace using `cmd` from dst node
-    # Caller will provide dst node for starting server; so this function is only client side.
+def _has_iperf3(node) -> bool:
+    return bool(node.cmd("command -v iperf3 2>/dev/null").strip())
+
+
+def _iperf3_client(src, dst_ip: str, seconds: int = 10, port: int = 5201) -> Tuple[IperfResult, str]:
     t0 = time.time()
-    out = src.cmd(f"iperf3 -c {dst_ip} -t {seconds} -p {port} -J 2>&1")
+    argv = ["iperf3", "-c", dst_ip, "-t", str(seconds), "-p", str(port), "-J"]
+    try:
+        _, out = _run_with_timeout(src, argv, timeout_s=float(seconds) + 5.0)
+    except Exception as e:
+        dt = time.time() - t0
+        return IperfResult(mbps=None, seconds=dt, error=f"iperf3 timeout/error: {e}"), "", 
     dt = time.time() - t0
     try:
         j = json.loads(out)
         bps = j.get("end", {}).get("sum_received", {}).get("bits_per_second")
         mbps = (float(bps) / 1_000_000.0) if bps is not None else None
         err = j.get("error")
-        return IperfResult(mbps=mbps, seconds=dt, error=err), out, server_out
+        return IperfResult(mbps=mbps, seconds=dt, error=err), out
     except Exception as e:
-        return IperfResult(mbps=None, seconds=dt, error=str(e)), out, server_out
+        return IperfResult(mbps=None, seconds=dt, error=str(e)), out
 
 
 def _dark_style() -> None:
@@ -165,6 +197,7 @@ def main() -> None:
 
     # Build topology (Phase 1)
     net = build_net(start_cli=False)
+    interrupted = False
     try:
         # Map host names used for measurements
         host1 = net.get("host1")
@@ -177,10 +210,9 @@ def main() -> None:
             ("admin1", "web1", "10.3.10.11"),
         ]
 
-        # Kiểm tra iperf3 có sẵn không (nếu không, throughput sẽ None và có raw_error)
-        iperf_ver = host1.cmd("iperf3 -v 2>/dev/null | head -n 1").strip()
-        if not iperf_ver:
-            print("[WARN] Không thấy `iperf3` trong VM. Sẽ chỉ có ping metrics (CSV vẫn được tạo).")
+        has_iperf = _has_iperf3(host1)
+        if not has_iperf:
+            print("[WARN] Không thấy `iperf3` trong VM -> bỏ qua throughput (chỉ đo ping).")
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         results: List[Measurement] = []
@@ -191,12 +223,14 @@ def main() -> None:
             dst = net.get(dst_name)
 
             port = port_base + idx
-            # start iperf3 server on dst
-            dst.cmd(f"pkill -f 'iperf3 -s' 2>/dev/null || true")
-            dst.cmd(f"iperf3 -s -1 -p {port} >/tmp/iperf3_{dst_name}_{port}.log 2>&1 &")
-            time.sleep(0.3)
-
-            iperf_res, iperf_raw, _ = _iperf3(src, dst_ip=dst_ip, seconds=10, port=port)
+            iperf_res = IperfResult(mbps=None, seconds=0.0, error=None)
+            iperf_raw = ""
+            if has_iperf:
+                # start iperf3 server on dst (background)
+                dst.cmd("pkill -f 'iperf3 -s' 2>/dev/null || true")
+                dst.cmd(f"iperf3 -s -1 -p {port} >/tmp/iperf3_{dst_name}_{port}.log 2>&1 &")
+                time.sleep(0.25)
+                iperf_res, iperf_raw = _iperf3_client(src, dst_ip=dst_ip, seconds=10, port=port)
             ping_res, ping_raw = _ping(src, dst_ip=dst_ip, count=20, interval=0.05)
 
             err = iperf_res.error
@@ -240,8 +274,18 @@ def main() -> None:
             print(f"[OK] Saved charts to: {IMG_DIR}")
         else:
             print("[WARN] Matplotlib chưa có -> bỏ qua vẽ chart (chỉ có CSV + raw logs).")
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\n[WARN] Bạn đã dừng tool (Ctrl+C). Đang dọn dẹp...")
     finally:
-        net.stop()
+        # Dọn dẹp an toàn: tránh AssertionError nếu Mininet node đang bận lệnh
+        try:
+            if net is not None:
+                net.stop()
+        except Exception as e:
+            print(f"[WARN] net.stop() gặp lỗi (có thể do Ctrl+C khi node đang chạy lệnh): {e}")
+        if interrupted:
+            print("[INFO] Đã dừng theo yêu cầu. File logs/ có thể đã được tạo một phần.")
 
 
 if __name__ == "__main__":
