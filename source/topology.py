@@ -295,6 +295,14 @@ BACKBONE_LINKS: List[LinkIP] = [
     LinkIP("P4", "P4-eth4", "10.0.47.1/30", "PE3", "PE3-eth1", "10.0.47.2/30", "10.0.47.0/30"),
 ]
 
+# Tập interface backbone (chỉ P-P và P-PE). Dùng để:
+# - bật MPLS input đúng cổng backbone
+# - bật LDP đúng cổng backbone (KHÔNG bật trên CE-PE)
+BACKBONE_INTF: Dict[str, List[str]] = {}
+for l in BACKBONE_LINKS:
+    BACKBONE_INTF.setdefault(l.a, []).append(l.a_if)
+    BACKBONE_INTF.setdefault(l.b, []).append(l.b_if)
+
 CE_PE_LINKS: List[LinkIP] = [
     LinkIP("CE1", "CE1-eth1", "10.0.101.1/30", "PE1", "PE1-eth2", "10.0.101.2/30", "10.0.101.0/30"),
     LinkIP("CE2", "CE2-eth2", "10.0.102.1/30", "PE2", "PE2-eth2", "10.0.102.2/30", "10.0.102.0/30"),
@@ -457,10 +465,8 @@ def build_net(start_cli: bool = False) -> Mininet:
 
     # Sau khi đã có interface thật, bật MPLS input cho các router backbone (P/PE)
     def enable_mpls_inputs(router: FrrRouter) -> None:
-        # chỉ bật trên các cổng eth* (backbone/CE-PE), đủ để label switching hoạt động
-        intfs = router.cmd(
-            "ip -o link | awk -F': ' '{print $2}' | grep -E '^" + router.name + r"-eth' | sed 's/@.*//'"
-        ).strip().splitlines()
+        # chỉ bật trên cổng backbone (P-P, P-PE). Tránh bật MPLS/LDP lên CE-PE làm rối dataplane.
+        intfs = BACKBONE_INTF.get(router.name, [])
         for i in intfs:
             sysctl(router, f"net.mpls.conf.{i}.input", "1")
             # Đồng thời tắt rp_filter theo từng interface để chắc chắn không bị strict filter
@@ -658,10 +664,8 @@ def build_net(start_cli: bool = False) -> Mininet:
 
     # LDP: bật trên các interface backbone eth* của P/PE
     def ldp_cfg(router: FrrRouter, lsr_id: str) -> None:
-        raw = router.cmd(
-            "ip -o link | awk -F': ' '{print $2}' | grep -E '^" + router.name + r"-eth'"
-        ).strip().splitlines()
-        intfs = sorted({i.split('@', 1)[0].strip() for i in raw if i.strip()})
+        # Chỉ enable LDP trên interface backbone (không enable trên CE-PE)
+        intfs = sorted(set(BACKBONE_INTF.get(router.name, [])))
         # FRR 8.x: cấu hình LDP trong address-family ipv4 và enable trên interface
         lines = [
             "conf t",
