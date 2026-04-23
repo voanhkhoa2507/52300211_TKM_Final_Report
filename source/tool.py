@@ -41,12 +41,15 @@ def _load_build_net():
     tránh trường hợp Python import nhầm module `topology` ở chỗ khác trong PYTHONPATH.
     """
     import importlib.util
+    import sys
 
     topo_path = (Path(__file__).resolve().parent / "topology.py").resolve()
     spec = importlib.util.spec_from_file_location("tkm_topology", topo_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Không load được topology từ {topo_path}")
     mod = importlib.util.module_from_spec(spec)
+    # Python 3.12: dataclasses/type resolution cần module tồn tại trong sys.modules
+    sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)  # type: ignore[attr-defined]
     if not hasattr(mod, "build_net"):
         raise RuntimeError(f"File topology không có build_net(): {topo_path}")
