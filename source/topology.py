@@ -677,11 +677,15 @@ def build_net(start_cli: bool = False) -> Mininet:
 
         pe_names = ["PE1", "PE2", "PE3"]
         pe_lo = {n: LOOPBACKS[n].split('/')[0] for n in pe_names}
+        pe_vpls_ip = {"PE1": "192.168.200.1/24", "PE2": "192.168.200.2/24", "PE3": "192.168.200.3/24"}
 
         def mk_bridge(pe: FrrRouter) -> None:
             pe.cmd("ip link add br-vpls type bridge 2>/dev/null || true")
             pe.cmd("ip link set dev br-vpls type bridge stp_state 1 2>/dev/null || true")
             pe.cmd("ip link set br-vpls up")
+            # gán 1 IP test lên bridge để bạn ping kiểm tra tunnel + học MAC (FDB)
+            pe.cmd("ip addr flush dev br-vpls 2>/dev/null || true")
+            pe.cmd(f"ip addr add {pe_vpls_ip[pe.name]} dev br-vpls 2>/dev/null || true")
 
         def mk_gretap(local_pe: FrrRouter, local_ip: str, remote_ip: str, ifname: str) -> None:
             local_pe.cmd(f"ip link del {ifname} 2>/dev/null || true")
@@ -706,6 +710,8 @@ def build_net(start_cli: bool = False) -> Mininet:
         info(
             "*** VPLS/GRETAP ready. Test:\n"
             "    PE1 ip link show type gretap\n"
+            "    PE1 ip addr show br-vpls\n"
+            "    PE1 ping -c 3 192.168.200.2   # PE1->PE2 over VPLS\n"
             "    PE1 bridge fdb show br br-vpls\n"
         )
 
