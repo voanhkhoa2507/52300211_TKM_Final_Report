@@ -674,8 +674,11 @@ def build_net(start_cli: bool = False) -> Mininet:
             "address-family ipv4",
             f"discovery transport-address {lsr_id}",
         ]
+        # Một số phiên bản FRR coi `interface <ifname>` là vào interface-submode.
+        # Để đảm bảo tất cả interface đều được apply (không bị "kẹt mode"),
+        # ta luôn `exit` sau mỗi interface.
         for i in intfs:
-            lines += [f"interface {i}"]
+            lines += [f"interface {i}", "exit"]
         lines += ["exit-address-family", "end", "write memory"]
         router.vty("\n".join(lines))
 
