@@ -118,6 +118,15 @@ class FrrRouter(Node):
     def config(self, **params):
         super().config(**params)
 
+        # Dọn tiến trình FRR cũ (nếu chạy lại topo khi chưa cleanup sạch).
+        # Nếu còn daemon cũ dùng vty socket khác, lệnh `show mpls ldp ...` có thể trả về trạng thái "lẫn" gây hiểu nhầm.
+        # Giết theo pidfile nếu tồn tại trước khi xoá thư mục.
+        for pidf in ("zebra.pid", "ospfd.pid", "ldpd.pid"):
+            self.cmd(
+                f"test -f {self.frr_conf_dir}/{pidf} && "
+                f"kill $(head -n 1 {self.frr_conf_dir}/{pidf}) >/dev/null 2>&1 || true"
+            )
+
         # Dọn firewall để tránh chặn ICMP/forwarding do rule còn sót (lab/demo trước đó)
         # (an toàn cho mô hình Mininet; giúp ping liên chi nhánh không bị drop "mysterious")
         self.cmd("iptables -P INPUT ACCEPT 2>/dev/null || true")
@@ -193,20 +202,23 @@ class FrrRouter(Node):
         self.cmd(
             f"{frr_bin}/zebra -d -A 127.0.0.1 "
             f"-z {self.zebra_sock} --vty_socket {self.frr_run_dir} "
-            f"-f {self.frr_conf_dir}/zebra.conf -i {self.frr_conf_dir}/zebra.pid >/dev/null 2>&1"
+            f"-f {self.frr_conf_dir}/zebra.conf -i {self.frr_conf_dir}/zebra.pid "
+            f"> {self.frr_conf_dir}/zebra.log 2>&1"
         )
         if self.enable_ospf:
             self.cmd(
                 f"{frr_bin}/ospfd -d -A 127.0.0.1 "
                 f"-z {self.zebra_sock} --vty_socket {self.frr_run_dir} "
-                f"-f {self.frr_conf_dir}/ospfd.conf -i {self.frr_conf_dir}/ospfd.pid >/dev/null 2>&1"
+                f"-f {self.frr_conf_dir}/ospfd.conf -i {self.frr_conf_dir}/ospfd.pid "
+                f"> {self.frr_conf_dir}/ospfd.log 2>&1"
             )
         if self.enable_ldp:
             # ldpd cần cho MPLS/LDP
             self.cmd(
                 f"{frr_bin}/ldpd -d -A 127.0.0.1 "
                 f"-z {self.zebra_sock} --vty_socket {self.frr_run_dir} "
-                f"-f {self.frr_conf_dir}/ldpd.conf -i {self.frr_conf_dir}/ldpd.pid >/dev/null 2>&1"
+                f"-f {self.frr_conf_dir}/ldpd.conf -i {self.frr_conf_dir}/ldpd.pid "
+                f"> {self.frr_conf_dir}/ldpd.log 2>&1"
             )
 
     def vty(self, cmds: str) -> str:
