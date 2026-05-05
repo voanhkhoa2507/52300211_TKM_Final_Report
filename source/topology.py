@@ -58,6 +58,17 @@ def sh(cmd: List[str], check: bool = False) -> subprocess.CompletedProcess:
 
 def cleanup_mininet() -> None:
     """Dọn rác để tránh node/link cũ làm bẩn lab."""
+    # FRR daemon chạy trong netns nhưng cùng PID namespace.
+    # Nếu một lần chạy trước không dọn sạch, có thể còn daemon "mồ côi" giữ socket/zserv,
+    # dẫn tới tình trạng xem LDP/OSPF bị "lẫn" giữa các node.
+    try:
+        sh(["bash", "-lc", "sudo pkill -f '/usr/(lib|libexec)/frr/(zebra|ospfd|ldpd)' 2>/dev/null || true"], check=False)
+    except Exception:
+        pass
+    try:
+        sh(["bash", "-lc", "sudo rm -rf /tmp/P[0-9] /tmp/PE[0-9] /tmp/CE[0-9] /tmp/SPINE* /tmp/LEAF_* 2>/dev/null || true"], check=False)
+    except Exception:
+        pass
     try:
         sh(["sudo", "mn", "-c"], check=False)
     except Exception:
