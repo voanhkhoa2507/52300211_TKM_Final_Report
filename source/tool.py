@@ -149,6 +149,28 @@ def exec_node(node: str, cmd: str, timeout_s: int = 20) -> str:
     return _sh(f"sudo mnexec -a {pid} {cmd}", timeout_s=timeout_s)
 
 
+def popen_node(node: str, argv: List[str]) -> Tuple[Optional[subprocess.Popen], str]:
+    """
+    Chạy lệnh trong namespace node và stream stdout theo dòng.
+    argv: danh sách tham số (không shell).
+    """
+    pid = _get_node_pid(node)
+    if pid is None:
+        return None, f"[tool] Không tìm thấy PID của node `{node}`. Hãy chắc chắn đang mở `mininet>`.\n"
+    try:
+        p = subprocess.Popen(
+            ["sudo", "mnexec", "-a", str(pid), *argv],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True,
+        )
+        return p, "OK"
+    except Exception as exc:
+        return None, f"[tool] Không chạy được lệnh trong `{node}`: {exc}\n"
+
+
 def ensure_namespaces_ready(required: List[str]) -> Tuple[bool, str]:
     missing = [n for n in required if _get_node_pid(n) is None]
     if missing:
@@ -175,6 +197,42 @@ def ping_test(src: str, dst_ip: str, count: int = 5) -> Tuple[Optional[PingStats
     return parse_ping_stats(out), out
 
 
+def ping_test_stream(src: str, dst_ip: str, count: int = 5, timeout_s: int = 20) -> Tuple[Optional[PingStats], str, List[str]]:
+    """
+    Ping nhưng trả thêm list các dòng output để GUI hiển thị giống ping thường.
+    """
+    p, msg = popen_node(src, ["ping", "-c", str(count), "-W", "1", "-n", dst_ip])
+    if p is None or p.stdout is None:
+        return None, msg, [msg]
+
+    lines: List[str] = []
+    t_end = time.time() + max(3, timeout_s)
+    try:
+        while True:
+            if time.time() > t_end:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+                lines.append("[tool] Ping TIMEOUT\n")
+                break
+            line = p.stdout.readline()
+            if not line:
+                if p.poll() is not None:
+                    break
+                time.sleep(0.01)
+                continue
+            lines.append(line.rstrip("\n"))
+    finally:
+        try:
+            p.stdout.close()
+        except Exception:
+            pass
+
+    raw = "\n".join(lines) + ("\n" if lines else "")
+    return parse_ping_stats(raw), raw, lines
+
+
 def traceroute_path(src: str, dst_ip: str, max_hops: int = 12) -> Tuple[List[str], str]:
     out = exec_node(src, f"traceroute -n -q 1 -w 1 -m {max_hops} {dst_ip}", timeout_s=30)
     hops = []
@@ -195,6 +253,39 @@ def iperf3_throughput_mbps(src: str, dst: str, dst_ip: str, seconds: int = 3, po
         return None, out
     bps = float(m.group(1))
     return bps / 1_000_000.0, out
+
+
+def save_iperf_table(title: str, src: str, dst: str, throughput_mbps: float, out_png: Path) -> None:
+    """
+    Xuất ảnh bảng throughput đơn giản (giống style case5).
+    """
+    fig, ax = plt.subplots(figsize=(8.8, 2.6))
+    ax.axis("off")
+    row1 = ["Path", src, dst]
+    row2 = ["Throughput (Mbps)", f"{throughput_mbps:.2f}", f"{throughput_mbps:.2f}"]
+    table = ax.table(
+        cellText=[row1, row2],
+        loc="center",
+        cellLoc="center",
+        colWidths=[0.22, 0.39, 0.39],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1, 2.0)
+    for (r, c), cell in table.get_celld().items():
+        cell.set_linewidth(1.5)
+        if c == 0:
+            cell.set_facecolor("#f4a261")
+            cell.set_text_props(weight="bold")
+        elif r == 0:
+            cell.set_facecolor("#e3f2fd")
+            cell.set_text_props(weight="bold")
+        else:
+            cell.set_facecolor("#ffffff")
+    ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=200)
+    plt.close(fig)
 
 
 def save_case5_table(title: str, path_nodes: List[str], throughput_mbps: float, out_png: Path) -> None:
@@ -298,11 +389,15 @@ class App(tk.Tk):
             dst = self.dst_var.get()
             dst_ip = IP_MAP.get(dst, dst)
             self._log(f"[PING] {src} -> {dst} ({dst_ip})")
-            stats, raw = ping_test(src, dst_ip, count=5)
+            stats, raw, lines = ping_test_stream(src, dst_ip, count=5, timeout_s=20)
+            for ln in lines:
+                # hiển thị từng gói tin như ping thường
+                if ln.strip():
+                    self._log(ln)
             if stats:
-                self._log(f"  loss={stats.loss_pct:.1f}% avg={stats.rtt_avg_ms:.3f}ms jitter={stats.rtt_mdev_ms:.3f}ms")
+                self._log(f"[PING-STAT] loss={stats.loss_pct:.1f}% avg={stats.rtt_avg_ms:.3f}ms jitter={stats.rtt_mdev_ms:.3f}ms")
             else:
-                self._log("  Không parse được ping (có thể unreachable).")
+                self._log("[PING-STAT] Không parse được ping (có thể unreachable).")
             (LOG_DIR / f"raw_ping_{src}_to_{dst}.txt").write_text(raw, encoding="utf-8")
         self._thread(work)
 
@@ -331,6 +426,11 @@ class App(tk.Tk):
                 self._log("  iperf3 FAIL. Xem raw log.")
             else:
                 self._log(f"  throughput={mbps:.2f} Mbps")
+                ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_png = IMG_DIR / f"iperf_table_{src}_to_{dst}_{ts}.png"
+                title = f"BẢNG ĐO THROUGHPUT (IPERF3) TỪ [{src.upper()}] ĐẾN [{dst.upper()}]"
+                save_iperf_table(title, src, dst, mbps, out_png)
+                self._log(f"  Saved: {out_png}")
             (LOG_DIR / f"raw_iperf3_{src}_to_{dst}.txt").write_text(raw, encoding="utf-8")
         self._thread(work)
 
