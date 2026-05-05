@@ -553,20 +553,20 @@ class App(tk.Tk):
                 self._log("[IPERF] Dst phải là host có IP trong IP_MAP (admin1/web1/dns1/db1/...)")
                 return
             self._log(f"[IPERF] {src} -> {dst} ({dst_ip})")
-            path_nodes, per_node, mbps, raw = iperf3_path_throughput(src, dst, dst_ip, seconds=3, port=5201, max_hops=12)
+            # Giữ đúng format như Case 5: lấy hop IP từ traceroute và vẽ 1 bảng duy nhất.
+            hops, _ = traceroute_path(src, dst_ip)
+            path_nodes = [src] + hops[:4] + [dst]
+            mbps, raw = iperf3_throughput_mbps(src, dst, dst_ip, seconds=3, port=5201)
             if mbps is None:
                 self._log("  iperf3 FAIL. Xem raw log.")
             else:
                 self._log(f"  throughput={mbps:.2f} Mbps")
                 ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-                out_png = IMG_DIR / f"iperf_table_{src}_to_{dst}_{ts}.png"
-                title = f"BẢNG ĐO THROUGHPUT (IPERF3) TỪ [{src.upper()}] ĐẾN [{dst.upper()}]"
-                save_iperf_table(title, src, dst, mbps, out_png)
+                out_png = IMG_DIR / f"iperf_path_table_{src}_to_{dst}_{ts}.png"
+                title = f"BẢNG ĐIỀU TRA ĐƯỜNG ĐI ROUTING (IPv4) TỪ [{src.upper()}] ĐẾN [{dst.upper()}]"
+                # Bảng giống Case 5: cùng một throughput end-to-end cho các cột.
+                save_case5_table(title, path_nodes, mbps, out_png)
                 self._log(f"  Saved: {out_png}")
-                out_png2 = IMG_DIR / f"iperf_path_table_{src}_to_{dst}_{ts}.png"
-                title2 = f"BẢNG ĐƯỜNG ĐI + THÔNG LƯỢNG (IPERF3) TỪ [{src.upper()}] ĐẾN [{dst.upper()}]"
-                save_path_throughput_table(title2, path_nodes, per_node, out_png2)
-                self._log(f"  Saved: {out_png2}")
             (LOG_DIR / f"raw_iperf3_{src}_to_{dst}.txt").write_text(raw, encoding="utf-8")
         self._thread(work)
 
