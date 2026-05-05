@@ -62,11 +62,21 @@ def cleanup_mininet() -> None:
     # Nếu một lần chạy trước không dọn sạch, có thể còn daemon "mồ côi" giữ socket/zserv,
     # dẫn tới tình trạng xem LDP/OSPF bị "lẫn" giữa các node.
     try:
-        sh(["bash", "-lc", "sudo pkill -f '/usr/(lib|libexec)/frr/(zebra|ospfd|ldpd)' 2>/dev/null || true"], check=False)
+        # Kill theo tên process để chắc chắn (lab chỉ chạy FRR trong Mininet).
+        sh(["bash", "-lc", "sudo pkill -9 -x zebra 2>/dev/null || true"], check=False)
+        sh(["bash", "-lc", "sudo pkill -9 -x ospfd 2>/dev/null || true"], check=False)
+        sh(["bash", "-lc", "sudo pkill -9 -x ldpd  2>/dev/null || true"], check=False)
+        # Một số distro còn có wrapper `frrinit.sh`/`watchfrr` (nếu có), cũng dọn luôn để tránh respawn.
+        sh(["bash", "-lc", "sudo pkill -9 -x watchfrr 2>/dev/null || true"], check=False)
     except Exception:
         pass
     try:
         sh(["bash", "-lc", "sudo rm -rf /tmp/P[0-9] /tmp/PE[0-9] /tmp/CE[0-9] /tmp/SPINE* /tmp/LEAF_* 2>/dev/null || true"], check=False)
+    except Exception:
+        pass
+    try:
+        # Dọn socket runtime mặc định của FRR nếu hệ thống có service FRR cài sẵn.
+        sh(["bash", "-lc", "sudo rm -rf /var/run/frr/* 2>/dev/null || true"], check=False)
     except Exception:
         pass
     try:
