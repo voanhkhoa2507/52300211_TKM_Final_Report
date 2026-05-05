@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 import json
+import shlex
 
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
@@ -255,6 +256,102 @@ def iperf3_throughput_mbps(src: str, dst: str, dst_ip: str, seconds: int = 3, po
     return bps / 1_000_000.0, out
 
 
+def _node_has_ip(node: str, ip: str) -> bool:
+    out = exec_node(node, f"ip -o -4 addr show 2>/dev/null | grep -w {shlex.quote(ip)} >/dev/null 2>&1; echo $?", timeout_s=4)
+    return out.strip().endswith("0")
+
+
+def resolve_node_by_ip(ip: str) -> Optional[str]:
+    """
+    Ánh xạ 1 hop IP (traceroute) -> tên node Mininet bằng cách dò interface IP.
+    """
+    priority = [
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+        "PE1",
+        "PE2",
+        "PE3",
+        "CE1",
+        "CE2",
+        "CE3",
+        "SPINE1",
+        "SPINE2",
+        "LEAF_WEB",
+        "LEAF_DNS",
+        "LEAF_DB",
+    ] + [n for n in NODE_LIST if n not in {"P1","P2","P3","P4","PE1","PE2","PE3","CE1","CE2","CE3","SPINE1","SPINE2","LEAF_WEB","LEAF_DNS","LEAF_DB"}]
+    for n in priority:
+        try:
+            if _node_has_ip(n, ip):
+                return n
+        except Exception:
+            continue
+    return None
+
+
+def route_out_interface(node: str, dst_ip: str) -> str:
+    out = exec_node(node, f"ip route get {shlex.quote(dst_ip)} 2>/dev/null | head -n 1", timeout_s=4)
+    m = re.search(r"\\bdev\\s+(\\S+)", out)
+    if not m:
+        return ""
+    return m.group(1).split("@", 1)[0]
+
+
+def read_intf_bytes(node: str, intf: str) -> int:
+    rx = exec_node(node, f"cat /sys/class/net/{shlex.quote(intf)}/statistics/rx_bytes 2>/dev/null || echo 0", timeout_s=3)
+    tx = exec_node(node, f"cat /sys/class/net/{shlex.quote(intf)}/statistics/tx_bytes 2>/dev/null || echo 0", timeout_s=3)
+    try:
+        rxi = int(rx.strip().splitlines()[-1])
+    except Exception:
+        rxi = 0
+    try:
+        txi = int(tx.strip().splitlines()[-1])
+    except Exception:
+        txi = 0
+    return rxi + txi
+
+
+def iperf3_path_throughput(
+    src: str,
+    dst: str,
+    dst_ip: str,
+    seconds: int = 3,
+    port: int = 5201,
+    max_hops: int = 12,
+) -> Tuple[List[str], List[float], Optional[float], str]:
+    """
+    Đo throughput end-to-end (iperf3) và ước lượng throughput theo từng thiết bị trên đường đi.
+    Mỗi thiết bị: đo delta(rx+tx) trên interface dùng để route tới dst_ip trong thời gian iperf chạy.
+    """
+    hops, _ = traceroute_path(src, dst_ip, max_hops=max_hops)
+    hop_nodes: List[str] = []
+    for hip in hops:
+        n = resolve_node_by_ip(hip)
+        if n and (not hop_nodes or hop_nodes[-1] != n):
+            hop_nodes.append(n)
+    path_nodes = [src] + hop_nodes + [dst]
+
+    out_if: List[str] = []
+    for n in path_nodes[:-1]:
+        out_if.append(route_out_interface(n, dst_ip))
+
+    b0 = [read_intf_bytes(n, iface) if iface else 0 for n, iface in zip(path_nodes[:-1], out_if)]
+    t0 = time.time()
+
+    mbps, raw = iperf3_throughput_mbps(src, dst, dst_ip, seconds=seconds, port=port)
+
+    t1 = time.time()
+    b1 = [read_intf_bytes(n, iface) if iface else 0 for n, iface in zip(path_nodes[:-1], out_if)]
+    dt_s = max(0.001, t1 - t0)
+    perhop = [max(0.0, ((b1i - b0i) * 8.0) / dt_s / 1_000_000.0) for b0i, b1i in zip(b0, b1)]
+
+    # thêm cột dst để bảng đẹp: dùng end-to-end throughput
+    perhop_full = perhop + ([float(mbps)] if mbps is not None else [0.0])
+    return path_nodes, perhop_full, mbps, raw
+
+
 def save_iperf_table(title: str, src: str, dst: str, throughput_mbps: float, out_png: Path) -> None:
     """
     Xuất ảnh bảng throughput đơn giản (giống style case5).
@@ -298,6 +395,41 @@ def save_case5_table(title: str, path_nodes: List[str], throughput_mbps: float, 
         loc="center",
         cellLoc="center",
         colWidths=[0.12] + [0.12] * len(path_nodes),
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 2.2)
+    for (r, c), cell in table.get_celld().items():
+        cell.set_linewidth(1.5)
+        if c == 0:
+            cell.set_facecolor("#f4a261")
+            cell.set_text_props(weight="bold")
+        elif r == 0:
+            cell.set_facecolor("#e3f2fd")
+            cell.set_text_props(weight="bold")
+        else:
+            cell.set_facecolor("#ffffff")
+    ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+
+
+def save_path_throughput_table(title: str, path_nodes: List[str], per_node_mbps: List[float], out_png: Path) -> None:
+    n = len(path_nodes)
+    per_node_mbps = (per_node_mbps + [0.0] * n)[:n]
+
+    fig, ax = plt.subplots(figsize=(max(10, 1.5 * n), 3))
+    ax.axis("off")
+    row1 = ["Path"] + path_nodes
+    row2 = ["Thông lượng (Mbps)"] + [f"{v:.2f}" for v in per_node_mbps]
+
+    col_w = [0.14] + [max(0.08, min(0.12, 0.86 / max(1, n))) for _ in range(n)]
+    table = ax.table(
+        cellText=[row1, row2],
+        loc="center",
+        cellLoc="center",
+        colWidths=col_w,
     )
     table.auto_set_font_size(False)
     table.set_fontsize(10)
@@ -421,7 +553,7 @@ class App(tk.Tk):
                 self._log("[IPERF] Dst phải là host có IP trong IP_MAP (admin1/web1/dns1/db1/...)")
                 return
             self._log(f"[IPERF] {src} -> {dst} ({dst_ip})")
-            mbps, raw = iperf3_throughput_mbps(src, dst, dst_ip, seconds=3, port=5201)
+            path_nodes, per_node, mbps, raw = iperf3_path_throughput(src, dst, dst_ip, seconds=3, port=5201, max_hops=12)
             if mbps is None:
                 self._log("  iperf3 FAIL. Xem raw log.")
             else:
@@ -431,6 +563,10 @@ class App(tk.Tk):
                 title = f"BẢNG ĐO THROUGHPUT (IPERF3) TỪ [{src.upper()}] ĐẾN [{dst.upper()}]"
                 save_iperf_table(title, src, dst, mbps, out_png)
                 self._log(f"  Saved: {out_png}")
+                out_png2 = IMG_DIR / f"iperf_path_table_{src}_to_{dst}_{ts}.png"
+                title2 = f"BẢNG ĐƯỜNG ĐI + THÔNG LƯỢNG (IPERF3) TỪ [{src.upper()}] ĐẾN [{dst.upper()}]"
+                save_path_throughput_table(title2, path_nodes, per_node, out_png2)
+                self._log(f"  Saved: {out_png2}")
             (LOG_DIR / f"raw_iperf3_{src}_to_{dst}.txt").write_text(raw, encoding="utf-8")
         self._thread(work)
 
